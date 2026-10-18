@@ -1,0 +1,102 @@
+{
+    "manifest_version": 3,
+    "default_locale": "en",
+    "name": "__MSG_appName__",
+    "short_name": "__MSG_appShortName__",
+    "author": "Phạm Văn Định",
+    "version": "1.0.0",
+    "description": "__MSG_appDescription__",
+    "homepage_url": "https://github.com/dinhdev666/shapeshift",
+    "minimum_chrome_version": "114",
+    "permissions": [
+        "storage",
+        "tabs",
+        "alarms",
+        "notifications",
+        "browsingData"
+    ],
+    "background": {
+        "service_worker": "background/service-worker.js"
+    },
+    "action": {
+        "default_popup": "popup/popup.html",
+        "default_icon": {
+            "16": "images/icon16.png",
+            "32": "images/icon32.png",
+            "48": "images/icon48.png",
+            "128": "images/icon128.png"
+        },
+        "default_title": "__MSG_appName__"
+    },
+    "options_page": "options/options.html",
+    "icons": {
+        "16": "images/icon16.png",
+        "32": "images/icon32.png",
+        "48": "images/icon48.png",
+        "128": "images/icon128.png"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "core/config-schema.js",
+                "core/config.js",
+                "core/hash.js",
+                "core/chrome-versions.js",
+                "core/prng.js",
+                "core/timing.js",
+                "core/stealth.js",
+                "core/salts.js",
+                "content/hooks_canvas.js",
+                "content/hooks_webgl.js",
+                "content/hooks_audio.js",
+                "content/hooks_screen.js",
+                "content/hooks_navigator.js",
+                "content/hooks_webrtc.js",
+                "content/hooks_fonts.js",
+                "content/hooks_timezone.js",
+                "content/hooks_sensors.js",
+                "content/hooks_touch.js",
+                "content/hooks_useragent.js",
+                "content/hooks_media.js",
+                "content/hooks_geolocation.js",
+                "content/hooks_detection.js",
+                "content/bootstrap.js",
+                "content/stats_tracker.js",
+                "content/test_fingerprint.js",
+                "content/content_main.js"
+            ],
+            "run_at": "document_start",
+            "world": "ISOLATED"
+        },
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content/page_world_injector.js"
+            ],
+            "run_at": "document_start",
+            "world": "MAIN"
+        }
+    ],
+    "commands": {
+        "toggle-protection": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+Y",
+                "mac": "Command+Shift+Y"
+            },
+            "description": "Toggle ShapeShift protection for this site"
+        },
+        "generate-identity": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+P",
+                "mac": "Command+Shift+P"
+            },
+            "description": "Generate a new fingerprint identity"
+        }
+    },
+    "web_accessible_resources": []
+}
