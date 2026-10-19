@@ -1,9 +1,14 @@
 // Hashing helpers to derive deterministic seeds with PBKDF2-style strengthening.
+// P10: JSDoc annotations enable `tsc --noEmit` type-checking on the core engine.
 (function () {
   const FNV_OFFSET = 0x811C9DC5;
   const FNV_PRIME = 0x01000193;
 
-  // FNV-1a hash - fast and good distribution
+  /**
+   * FNV-1a hash of a string from the offset basis.
+   * @param {string} str - Input string.
+   * @returns {number} Unsigned 32-bit hash.
+   */
   function hashString (str) {
     return fnvUpdate(FNV_OFFSET, str);
   }
@@ -15,6 +20,12 @@
   // and carried forward. `fnvUpdate` is exported so hooks can reuse a prefix
   // state and hash only the varying digits, producing byte-identical results
   // without allocating.
+  /**
+   * FNV-1a fold: update an existing hash state with another string.
+   * @param {number} state - Existing hash state (uint32).
+   * @param {string} str - Input string.
+   * @returns {number} Updated uint32 hash.
+   */
   function fnvUpdate (state, str) {
     let h = state >>> 0;
     const s = String(str);
@@ -32,6 +43,12 @@
   // the same string as i=12 with an empty tail). Every field is now
   // length-prefixed and delimiter-terminated, so two different tuples can never
   // flatten onto the same byte stream.
+  /**
+   * Length-prefixed, delimiter-terminated string mix before hashing.
+   * Prevents collision tuples like ("ab", "c") vs ("a", "bc").
+   * @param {...*} parts
+   * @returns {number} Unsigned 32-bit hash of the length-prefixed tuple.
+   */
   function mixString (...parts) {
     let out = '';
     for (const part of parts) {
@@ -45,6 +62,12 @@
   // fractional, NaN or absurd `kdfIterations` either hung the page or silently
   // collapsed the KDF to a single round. Clamp once, here, so both worlds agree.
   const MAX_ITERATIONS = 200000;
+  /**
+   * Clamp a KDF iteration count to [1, 200000], falling back on invalid input.
+   * @param {number} value - Requested iterations.
+   * @param {number} fallback - Fallback when value is non-finite or < 1.
+   * @returns {number} Safe iteration count.
+   */
   function clampIterations (value, fallback) {
     const n = Number(value);
     if (!Number.isFinite(n)) return fallback;
@@ -55,6 +78,13 @@
   }
 
   // PBKDF2-style iterative key derivation for stronger seed
+  /**
+   * PBKDF2-style iterative key derivation with length-prefixed mixing.
+   * @param {*} baseSalt - The persistent salt (hex string) or a pre-mixed hash.
+   * @param {string} origin - The page origin (or "" for global).
+   * @param {number} [iterations=1000] - KDF rounds (clamped).
+   * @returns {number} Unsigned 32-bit derived seed.
+   */
   function deriveStrongSeed(baseSalt, origin, iterations = 1000) {
     const iters = clampIterations(iterations, 1000);
     // Initial mix
@@ -75,6 +105,15 @@
   // every other surface. Deriving an independent seed per
   // (salt, origin, surfaceId) removes that coupling while keeping each surface
   // deterministic on its own.
+  /**
+   * Per-surface independent seed: each protected surface gets its own
+   * derivation key so enabling/disabling one does not shift another.
+   * @param {string} baseSalt - The persistent salt.
+   * @param {string} origin - The page origin.
+   * @param {string} surfaceId - Surface identifier (e.g. "canvas", "webgl").
+   * @param {number} [iterations=64] - KDF rounds (clamped).
+   * @returns {number} Unsigned 32-bit per-surface seed.
+   */
   function deriveSurfaceSeed (baseSalt, origin, surfaceId, iterations = 64) {
     const mixed = mixString('ss.surface', surfaceId, baseSalt, origin || "");
     return deriveStrongSeed(mixed, surfaceId, clampIterations(iterations, 64));
@@ -85,16 +124,28 @@
   // (deriveSeed(A, B) === deriveSeed(B, A)) and folded the whole tuple into 32
   // bits. Keep the name for callers that opt out of the strong KDF, but derive
   // it order-sensitively.
+  /**
+   * Legacy order-sensitive derivation (fallback when strongKDF is disabled).
+   * @param {string} baseSalt - The persistent salt.
+   * @param {string} origin - The page origin (or "").
+   * @returns {number} Unsigned 32-bit seed.
+   */
   function deriveSeed (baseSalt, origin) {
     return mixString('ss.legacy', baseSalt, origin || "");
   }
 
   // Use strong derivation by default, but allow legacy mode
+  /**
+   * Derive a seed respecting the config's useStrongKDF flag.
+   * @param {string} baseSalt - The persistent salt.
+   * @param {string} origin - The page origin (or "").
+   * @returns {number} Unsigned 32-bit seed.
+   */
   function deriveSeedWithConfig(baseSalt, origin) {
     const config = globalThis.ssConfig || {};
     if (config.useStrongKDF !== false) {
       // Default to strong KDF (1000 iterations); clamped in deriveStrongSeed.
-      return deriveStrongSeed(baseSalt, origin, clampIterations(config.kdfIterations, 1000));
+      return deriveStrongSeed(baseSalt, origin, clampIterations(/** @type {number} */ (config.kdfIterations), 1000));
     }
     // Fallback to simple derivation if disabled
     return deriveSeed(baseSalt, origin);

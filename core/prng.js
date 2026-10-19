@@ -1,11 +1,18 @@
 // Deterministic pseudo-random generator (Xoshiro128**).
 // Stronger than Mulberry32, produces stable noise for a given seed.
 // Based on xoshiro128** by Blackman and Vigna.
+// P10: JSDoc annotations enable `tsc --noEmit` type-checking on the core engine.
 (function () {
-  // Xoshiro128** - High quality, fast PRNG
+  /**
+   * Xoshiro128** PRNG seeded from a 32-bit integer.
+   * @param {number} seed - 32-bit seed value.
+   * @returns {() => number} A function returning floats in [0, 1).
+   */
   function createPRNG (seed) {
     // Initialize state using SplitMix32
+    /** @param {number} a - Seed value. */
     function splitmix32(a) {
+      /** @returns {number} */
       return function() {
         a |= 0;
         a = a + 0x9e3779b9 | 0;
@@ -47,7 +54,11 @@
     };
   }
 
-  // Also keep legacy Mulberry32 for backwards compatibility testing
+  /**
+   * Legacy Mulberry32 PRNG for backwards-compatibility testing.
+   * @param {number} seed - 32-bit seed value.
+   * @returns {() => number} A function returning floats in [0, 1).
+   */
   function createMulberry32PRNG(seed) {
     let state = seed >>> 0;
     return function next() {

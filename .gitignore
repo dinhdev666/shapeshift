@@ -18,6 +18,12 @@ coverage/
 *.map
 *.tsbuildinfo
 
+# Playwright / test artifacts
+playwright-report/
+test-results/
+blob-local/
+blob-trace/
+
 # IDE
 .vscode/
 .idea/

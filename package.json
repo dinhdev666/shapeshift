@@ -5,6 +5,7 @@
   "author": "Phạm Văn Định",
   "license": "MIT",
   "private": true,
+  "type": "module",
   "packageManager": "pnpm@10.0.0",
   "repository": {
     "type": "git",
@@ -13,12 +14,28 @@
   "homepage": "https://github.com/dinhdev666/shapeshift",
   "scripts": {
     "verify": "node scripts/verify.mjs",
-    "lint": "node scripts/verify.mjs --lint",
+    "lint": "node scripts/verify.mjs --lint && eslint . && prettier --check .",
     "test": "node scripts/verify.mjs && node scripts/test.mjs",
     "build": "node scripts/build.mjs",
     "bench": "node scripts/bench.mjs",
     "icons": "node scripts/generate-icons.mjs",
-    "migrate": "node scripts/rename-namespace.mjs"
+    "migrate": "node scripts/rename-namespace.mjs",
+    "bump": "node scripts/bump-version.mjs",
+    "lint:eslint": "eslint .",
+    "lint:prettier": "prettier --check .",
+    "format": "prettier --write .",
+    "dev": "node scripts/watch.mjs",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "test:a11y": "playwright test tests/e2e/a11y.spec.js"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.5.0",
+    "@playwright/test": "^1.47.0",
+    "axe-playwright": "^2.2.2",
+    "axe-core": "^4.10.0"
   },
   "engines": {
     "node": ">=20.0.0",

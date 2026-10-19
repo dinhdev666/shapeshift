@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "checkJs": true,
+    "noEmit": true,
+    "allowJs": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "node",
+    "types": []
+  },
+  "include": ["core/global-types.d.ts", "core/hash.js", "core/prng.js"],
+  "exclude": [
+    "dist/",
+    "node_modules/",
+    "core/config.js",
+    "core/config-schema.js",
+    "core/stealth.js",
+    "core/timing.js",
+    "core/salts.js",
+    "core/chrome-versions.js"
+  ]
+}

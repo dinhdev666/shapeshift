@@ -1,0 +1,41 @@
+dist/
+node_modules/
+*.log
+playwright-report/
+test-results/
+blob-local/
+blob-trace/
+
+# P1: Prettier is a hard gate for new tooling files only. The existing source
+# files use a different style (spaces before function parens, uppercase hex,
+# CRLF in some cases) that the substring-based gates in verify.mjs/test.mjs
+# depend on. Formatting them would require rewriting every assertion, which is
+# out of scope for this proposal.
+core/
+content/
+!content/worker_shim.js
+background/
+popup/
+options/
+
+# Existing scripts use a pre-Prettier style; only new scripts are checked.
+scripts/
+!scripts/watch.mjs
+!scripts/bump-version.mjs
+
+# Existing markdown and docs
+*.md
+CONTRIBUTING.md
+BUILD.md
+
+# Existing HTML files use hand-crafted formatting
+*.html
+
+# Lockfile and machine-generated formats
+pnpm-lock.yaml
+
+# Manifest uses 4-space indent (Chrome convention); package.json and locale
+# JSON use a pre-existing style that should not be churned.
+manifest.json
+package.json
+_locales/

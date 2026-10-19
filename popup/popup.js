@@ -129,7 +129,7 @@ function setHero (enabled, config) {
   const activeCount = MODULES.filter(function (m) { return config[m.key] !== false; }).length;
   const pct = enabled ? Math.round((activeCount / MODULES.length) * 100) : 0;
   const ring = $('ringProgress');
-  if (ring) ring.setAttribute('stroke-dashoffset', String(251.3 * (1 - pct / 100)));
+  if (ring) ring.setAttribute('stroke-dashoffset', String((globalThis.ssRingCircumference || 251.3) * (1 - pct / 100)));
   const score = $('heroScore');
   if (score) score.textContent = String(pct);
   hero.classList.toggle('off', !enabled);

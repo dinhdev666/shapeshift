@@ -1007,6 +1007,59 @@ assert('the WebGPU requestAdapter hook tags the resolved adapter',
   injectorSrc.includes('return result.then(tagAdapter)'),
   'the WebGPU persona never reaches the adapter');
 
+section('P4: worker shim builder');
+// P4: ssBuildWorkerShim must be a real function, not an inline string template.
+const shimBuilderSandbox = loadCore('content/worker_shim.js');
+assert('ssBuildWorkerShim is exported as a function', typeof shimBuilderSandbox.ssBuildWorkerShim === 'function', typeof shimBuilderSandbox.ssBuildWorkerShim);
+const workerPersona = { hardwareConcurrency: 8, deviceMemory: 8, platform: 'Linux x86_64' };
+const shimSource = shimBuilderSandbox.ssBuildWorkerShim(workerPersona);
+assert('ssBuildWorkerShim returns a non-empty string', typeof shimSource === 'string' && shimSource.length > 0, String(shimSource));
+assert('worker shim patches hardwareConcurrency', shimSource.includes('hardwareConcurrency'));
+assert('worker shim patches deviceMemory', shimSource.includes('deviceMemory'));
+assert('worker shim patches platform', shimSource.includes('platform'));
+assert('worker shim does not patch forbidden keys',
+  !shimSource.includes('__ssTime') && !shimSource.includes('currentTime') && !shimSource.includes('timing'),
+  'found forbidden key in shim output');
+assert('worker shim is valid JS', (() => { try { new Function(shimSource); return true; } catch(e) { return false; } })(), 'shimSource failed to parse');
+
+section('P8: ISOLATED hooks registration');
+// P8: every protected surface must push an installer onto ssHookInstallers.
+// The array is declared at the top of content/bootstrap.js, so count the push
+// calls across all hooks_*.js files. 14 surfaces = 14 installers.
+const stealthExceptions = ['geolocation', 'useragent'];
+const hookInstallers = [];
+surfaceHooks.forEach((id) => {
+  const src = readFileSync(join(ROOT, 'content/hooks_' + id + '.js'), 'utf8');
+  const pushCount = (src.match(/installers\.push\(/g) || []).length;
+  if (pushCount > 0) hookInstallers.push({ id, count: pushCount });
+});
+assert('14 hook installers are registered', hookInstallers.length === 14, 'found ' + hookInstallers.length);
+assert('each hook registers exactly one installer', hookInstallers.every((h) => h.count === 1), JSON.stringify(hookInstallers));
+// P8: every non-exempt hook must check its config toggle before patching.
+const noConfigGuard = surfaceHooks.filter((id) => {
+  if (stealthExceptions.indexOf(id) !== -1) return false;
+  const src = readFileSync(join(ROOT, 'content/hooks_' + id + '.js'), 'utf8');
+  return !/enable[A-Z][a-zA-Z]*Protection|config\?\.enable/.test(src);
+});
+assert('every hook guards on its config toggle', noConfigGuard.length === 0, noConfigGuard.join(', '));
+// P1/P6 guard (AGENTS.md §6): hooks that patch prototypes must guard with
+// ssStealth.isPatched() and call markPatched() so re-entry is a no-op. Two
+// hooks are intentionally exempt: geolocation is a no-op stub (MAIN world
+// owns it), and useragent manages its own descriptor caching without stealth.
+const unGuarded = surfaceHooks.filter((id) => {
+  if (stealthExceptions.indexOf(id) !== -1) return false;
+  const src = readFileSync(join(ROOT, 'content/hooks_' + id + '.js'), 'utf8');
+  return !/ssStealth.*isPatched|ssStealth \&\& .* isPatched/.test(src);
+});
+assert('every hook guards with ssStealth.isPatched()', unGuarded.length === 0, unGuarded.join(', '));
+// P8: geolocation is a no-op in ISOLATED — the real implementation lives in
+// the MAIN world (page_world_injector.js). The ISOLATED installer must NOT
+// patch any prototype; it should only log a debug message.
+const geoSrc = readFileSync(join(ROOT, 'content/hooks_geolocation.js'), 'utf8');
+assert('ISOLATED geolocation installer is a no-op stub',
+  geoSrc.includes('MAIN world owns this surface') && !/defineProperty\s*\(\s*navigator/.test(geoSrc),
+  'geolocation hook should not patch navigator');
+
 console.log('');
 console.log((failures === 0 ? 'PASS' : 'FAIL') + ' - ' + (checks - failures) + '/' + checks + ' tests passed');
 process.exit(failures === 0 ? 0 : 1);

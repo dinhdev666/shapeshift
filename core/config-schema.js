@@ -189,4 +189,11 @@
   globalThis.ssDefaultConfig = defaults;
   globalThis.ssFlatDefaults = flatDefaults;
   globalThis.ssFlatToNested = flatToNested;
+
+  // P7: centralize the SVG ring circumference. Every progress ring in the popup
+  // and options UI uses the same 40-radius circle (r=40 → C = 2π·40 ≈ 251.3).
+  // Hard-coding the literal in CSS and JS meant a radius change required updates
+  // in four places, and a mismatched literal made the ring arc jump by a full
+  // turn at 100 %. Expose it as a single ss* global so JS and CSS share one value.
+  globalThis.ssRingCircumference = 251.3;
 })();

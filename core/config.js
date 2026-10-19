@@ -1,4 +1,5 @@
 // Basic configuration knobs for fingerprint perturbation.
+// P10: JSDoc annotations enable `tsc --noEmit` type-checking on the core engine.
 //
 // Architecture §4: defaults, schema version and the legacy flat-key map live
 // in core/config-schema.js, which manifest.json loads first. This file builds
@@ -13,6 +14,11 @@
   // therefore edited the process-wide defaults, and the next
   // ssLoadConfig() call merged the mutated values back in as if the user
   // had chosen them. Deep-clone the groups so defaults stay pristine.
+  /**
+   * Shallow-clone a nested config group so defaults stay pristine.
+   * @param {Record<string, unknown>|*} v
+   * @returns {Record<string, unknown>|*}
+   */
   const cloneGroup = (v) => {
     if (!v || typeof v !== 'object' || Array.isArray(v)) return v;
     const out = {};
@@ -35,6 +41,11 @@
   // stored version reaches CONFIG_VERSION.
   const CONFIG_MIGRATIONS = schema.migrations || {};
 
+  /**
+   * Run one-shot config version migrations.
+   * @param {Record<string, unknown>} stored - Stored config object.
+   * @returns {Record<string, unknown>} Migrated config.
+   */
   globalThis.ssMigrateConfig = function (stored) {
     if (!stored || typeof stored !== 'object') return stored;
     let version = Number.isInteger(stored.ssConfigVersion) ? stored.ssConfigVersion : 0;
@@ -49,6 +60,12 @@
     return stored;
   };
 
+  /**
+   * Normalize a stored config: migrate, fold legacy flat keys into nested
+   * groups, apply profile preset overrides, and map legacy flags.
+   * @param {Record<string, unknown>} stored - Raw stored config.
+   * @returns {Record<string, unknown>} Normalized config.
+   */
   globalThis.ssNormalizeConfig = function (stored) {
     if (!stored || typeof stored !== 'object') return {};
     const out = {};
@@ -103,6 +120,10 @@
 
   globalThis.ssConfig = config;
 
+  /**
+   * Load stored config from chrome.storage.local, merge with defaults.
+   * @returns {Promise<Record<string, unknown>>} Resolved merged config.
+   */
   globalThis.ssLoadConfig = async function () {
     const defaultConfig = {};
     for (const k in config) defaultConfig[k] = config[k];

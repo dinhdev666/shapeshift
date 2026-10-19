@@ -56,6 +56,34 @@ if (manifest) {
   const extra = (manifest.permissions || []).filter((p) => !allowed.has(p));
   extra.length === 0 ? ok('no unexpected permissions') : fail('no unexpected permissions', extra.join(', '));
 
+  // P15: a CSP that is too broad lets the page inject its own scripts into a
+  // content-script context, and a missing CSP means Chrome uses its default
+  // which may be wider than intended. Pin the extension to its own scripts only.
+  if (manifest.content_security_policy && manifest.content_security_policy.extension_pages) {
+    ok('CSP present in manifest');
+    const csp = manifest.content_security_policy.extension_pages;
+    csp.includes('script-src') ? ok('CSP pins script-src') : fail('CSP pins script-src', csp);
+    /script-src[^;]*'self'/.test(csp) ? ok('CSP scopes script-src to self') : fail('CSP scopes script-src to self', csp);
+    // 'unsafe-inline' is legitimate in style-src, but never in script-src.
+    const scriptSrc = (csp.match(/script-src[^;]*/) || [''])[0];
+    !/script-src[^;]*'unsafe-inline'/.test(csp) ? ok('CSP bans unsafe-inline in script-src') : fail('CSP bans unsafe-inline in script-src', csp);
+  } else {
+    fail('CSP present in manifest', 'content_security_policy.extension_pages missing');
+  }
+
+  // P11: the version in manifest.json and package.json must be the same, or the
+  // build step silently ships a stale label. The semver bump script (bump)
+  // writes both; this gate pins the write path together.
+  const pkgPath = join(ROOT, 'package.json');
+  const pkgVersion = (existsSync(pkgPath) && (JSON.parse(text(pkgPath)).version)) || null;
+  if (pkgVersion) {
+    manifest.version === pkgVersion
+      ? ok('manifest and package.json versions align')
+      : fail('manifest and package.json versions align', manifest.version + ' !== ' + pkgVersion);
+  } else {
+    fail('package.json exists for version check');
+  }
+
   const referenced = [];
   if (manifest.background && manifest.background.service_worker) referenced.push(manifest.background.service_worker);
   if (manifest.action && manifest.action.default_popup) referenced.push(manifest.action.default_popup);
@@ -275,14 +303,57 @@ const nonceChecks = [
   ['bootstrap listens for SS_PAGE_WORLD_READY', bootstrapSrc.includes("'SS_PAGE_WORLD_READY'")],
   ['bootstrap echoes the nonce', bootstrapSrc.includes('nonce: pageNonce')],
   ['bootstrap asks for the nonce', bootstrapSrc.includes('SS_PAGE_WORLD_HELLO')],
-  // P0 2.1: the listener must not be one-shot.
-  ['injector does not register a one-shot message listener', !/once\s*:\s*true/.test(injectorCode)],
+  // P12: a bare /once:/ regex matches any `once: true` anywhere — including
+  // unrelated listeners on non-message events that are legitimately one-shot.
+  // Pin the check to the actual addEventListener('message', …) call site so a
+  // future refactor can add a one-shot listener for a different event without
+  // tripping this guard.
+  ['injector does not register a one-shot message listener',
+    !/addEventListener\s*\(\s*['"]message['"]\s*,[^\n]*once\s*:\s*true/.test(injectorCode)
+    && !/chrome\.runtime\.onMessage\.addListener[^\n]*once\s*:\s*true/.test(injectorCode)],
   ['injector keeps its listener attached across messages', !/removeEventListener\s*\(\s*['"]message['"]/.test(injectorCode)]
 ];
 const nonceFailures = nonceChecks.filter(([, pass]) => !pass).map(([label]) => label);
 nonceFailures.length === 0
   ? ok('nonce handshake is wired on both sides')
   : fail('nonce handshake is wired on both sides', nonceFailures.join(', '));
+
+section('cross-world constant parity');
+// ISOLATED (hooks_*.js, bootstrap.js) and MAIN (page_world_injector.js) worlds
+// must agree on the constants that parameterize spoofed values, else the page
+// sees a different spoof than the extension reports. Both worlds load the
+// shared core/ files at runtime, but page_world_injector.js inlines its own
+// copies of the Chrome version table and the FNV seed constants for self-
+// containment. Those inlined copies drift silently unless a gate pins them.
+const chromeVersions = text(join(ROOT, 'core/chrome-versions.js'));
+const injectorVersionMatch = chromeVersions.match(/CHROME_STABLE_VERSIONS\s*=\s*(\[[\s\S]*?\])/);
+const injectedVersionMatch = injectorSrc.match(/CHROME_STABLE_VERSIONS\s*=\s*(\[[\s\S]*?\])/);
+// The array uses single-quoted JS strings, so normalize to JSON for comparison.
+const parseJsArray = (match) => match ? JSON.parse(match[1].replace(/'/g, '"')) : null;
+const coreVersions = parseJsArray(injectorVersionMatch);
+const injVersions = parseJsArray(injectedVersionMatch);
+if (coreVersions && injVersions) {
+  coreVersions.length === injVersions.length && coreVersions.every((v, i) => v === injVersions[i])
+    ? ok('CHROME_STABLE_VERSIONS matches between core and injector')
+    : fail('CHROME_STABLE_VERSIONS matches between core and injector',
+      'core has ' + coreVersions.length + ', injector has ' + injVersions.length);
+} else {
+  fail('CHROME_STABLE_VERSIONS matches between core and injector', 'parse error');
+}
+
+// P6: the FNV offset basis and prime used by page_world_injector.js for WebGL
+// ID hashing must match the canonical values in core/hash.js. The injector
+// inlines its own copy; if it diverges the WebGL vendor/renderer hash no
+// longer matches what the ISOLATED world computes for its own checks.
+const coreHash = text(join(ROOT, 'core/hash.js'));
+const fnvOffsetCore = coreHash.match(/FNV_OFFSET\s*=\s*(0x[0-9a-fA-F]+)/);
+const fnvPrimeCore = coreHash.match(/FNV_PRIME\s*=\s*(0x[0-9a-fA-F]+)/);
+const fnvOffsetInj = injectorSrc.match(/FNV_OFFSET\s*=\s*(0x[0-9a-fA-F]+)/);
+const fnvPrimeInj = injectorSrc.match(/FNV_PRIME\s*=\s*(0x[0-9a-fA-F]+)/);
+const fnvOk = fnvOffsetCore && fnvOffsetInj && fnvPrimeCore && fnvPrimeInj
+  && parseInt(fnvOffsetCore[1], 16) === parseInt(fnvOffsetInj[1], 16)
+  && parseInt(fnvPrimeCore[1], 16) === parseInt(fnvPrimeInj[1], 16);
+fnvOk ? ok('FNV constants match between core and injector') : fail('FNV constants match between core and injector');
 
 section('MAIN-world statistics bridge');
 // P2 7.1: the counters used to be ISOLATED-only, so a page that only ever read
@@ -498,6 +569,23 @@ jsFiles.forEach((file) => {
 networkHits.length === 0
   ? ok('no network APIs in the runtime')
   : fail('no network APIs in the runtime', networkHits.slice(0, 10).join(', '));
+
+// P7: the ring circumference must be read from the centralized
+// globalThis.ssRingCircumference constant, not hard-coded as the literal 251.3.
+// A bare literal in popup.js or options.js means a radius change silently breaks
+// the progress arc while every other check stays green.
+section('ring circumference');
+const ringJsFiles = ['popup/popup.js', 'options/options.js'];
+const ringLeaks = ringJsFiles.filter((rel) => {
+  const src = stripLineComments(text(join(ROOT, rel)));
+  // Allow the defensive `|| 251.3` fallback that guards against a failed
+  // config-schema.js load; flag any other bare literal.
+  const cleaned = src.replace(/ssRingCircumference\s*\|\|\s*251\.3/g, '');
+  return /\b251\.3\b/.test(cleaned);
+});
+ringLeaks.length === 0
+  ? ok('no raw 251.3 literal in popup/options JS')
+  : fail('no raw 251.3 literal in popup/options JS', ringLeaks.join(', '));
 
 section('UI safety');
 const innerHtmlHits = jsFiles.filter((f) => (f.indexOf('popup') !== -1 || f.indexOf('options') !== -1) && text(f).indexOf('innerHTML') !== -1);
@@ -804,6 +892,33 @@ if (SKIP_DIST) {
       compareDist(dir + '/' + entry);
     });
   });
+  // P13: images/ and _locales/ are non-JS assets but still ship in dist/.
+  // A stale icon or a missing locale catalog in dist/ means the user sees
+  // the old branding or raw __MSG_*__ tokens until someone re-runs build.mjs.
+  ['images'].forEach((dir) => {
+    const abs = join(ROOT, dir);
+    if (!existsSync(abs)) return;
+    const distAbs = join(ROOT, 'dist', dir);
+    readdirSync(abs).forEach((entry) => {
+      if (!statSync(join(abs, entry)).isFile()) return;
+      if (extname(entry) !== '.png') return;
+      compareDist(dir + '/' + entry);
+    });
+  });
+  if (existsSync(join(ROOT, '_locales'))) {
+    const localesAbs = join(ROOT, 'dist', '_locales');
+    if (existsSync(localesAbs)) {
+      readdirSync(join(ROOT, '_locales')).forEach((localeDir) => {
+        if (!statSync(join(ROOT, '_locales', localeDir)).isDirectory()) return;
+        readdirSync(join(ROOT, '_locales', localeDir)).forEach((entry) => {
+          if (extname(entry) !== '.json') return;
+          compareDist('_locales/' + localeDir + '/' + entry);
+        });
+      });
+    } else {
+      drift.push('_locales/ missing from dist/');
+    }
+  }
   compareDist('manifest.json');
   drift.length === 0
     ? ok('dist/ matches the runtime sources')

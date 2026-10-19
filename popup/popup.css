@@ -26,6 +26,10 @@
   --edge: linear-gradient(120deg, var(--teal), var(--indigo) 52%, var(--violet));
   --font: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  /* P7: centralized ring circumference - shared with options.css and the JS
+     that sets stroke-dashoffset. Changing the ring radius only requires
+     updating this one variable. */
+  --ring-circumference: 251.3;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -116,7 +120,7 @@ body {
 .ring-track { fill: none; stroke: rgba(255, 255, 255, 0.08); stroke-width: 7; }
 .ring-progress {
   fill: none; stroke: url(#ssRingPopup); stroke-width: 7; stroke-linecap: round;
-  stroke-dasharray: 251.3; stroke-dashoffset: 0;
+  stroke-dasharray: var(--ring-circumference); stroke-dashoffset: 0;
   transition: stroke-dashoffset 0.8s cubic-bezier(0.22, 0.8, 0.24, 1), stroke 0.3s ease;
   filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.55));
 }

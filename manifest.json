@@ -76,6 +76,7 @@
                 "<all_urls>"
             ],
             "js": [
+                "content/worker_shim.js",
                 "content/page_world_injector.js"
             ],
             "run_at": "document_start",
@@ -98,5 +99,8 @@
             "description": "Generate a new fingerprint identity"
         }
     },
-    "web_accessible_resources": []
+    "web_accessible_resources": [],
+    "content_security_policy": {
+        "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'"
+    }
 }

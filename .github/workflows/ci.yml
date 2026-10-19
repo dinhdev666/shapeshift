@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   verify:
-    name: verify (${{ matrix.os }}, node ${{ matrix.node }})
+    name: verify (node ${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -25,7 +25,7 @@ jobs:
         # Node 18 reached end of life in April 2025. The gate uses
         # `readdirSync`/`structuredClone`-era APIs and the `--check` flag, all
         # of which are stable on 20 and 22; testing the LTS pair keeps the
-        # matrix meaningful without certifying an unsupported runtime.
+        # matrix meaningful without certuring an unsupported runtime.
         node: ['20', '22']
     steps:
       - uses: actions/checkout@v4
@@ -34,17 +34,37 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
+          cache: 'pnpm'
 
-      # No dependencies to install: the extension is plain JS with no bundler
-      # and no lockfile, so the checkout is directly runnable.
-      #
-      # `--lint` already runs every structural check and then adds the lint
-      # rules, so a second plain run only duplicated the whole gate's output.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package-manager-version: '10'
+
+      # P1: install dev dependencies (eslint, prettier) alongside the
+      # dependency-free runtime scripts.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `--lint` runs every structural check and then adds the lint rules,
+      # so a second plain run only duplicated the whole gate's output.
       - name: Structural verification + lint rules
         run: node scripts/verify.mjs --lint
 
       - name: Unit tests
         run: node scripts/test.mjs
+
+      # P1: ESLint + Prettier as separate steps so failures are clearly
+      # attributed to formatting/style vs. structural issues.
+      - name: ESLint
+        run: pnpm run lint:eslint
+
+      - name: Prettier check
+        run: pnpm run lint:prettier
+
+      # P10: type-check the core engine with JSDoc + tsc --noEmit.
+      - name: Type-check core
+        run: pnpm run typecheck
 
       # The canvas/audio hot path is the only place where a correct but slow
       # rewrite would still pass every other check. Run the benchmark so a
@@ -70,9 +90,42 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shapeshift-dist
-          # `dist/` (with the trailing slash) uploads the *contents* of the
-          # folder, so the artifact arrived as a loose core/content/... tree
-          # with no dist/ root and could not be dropped onto chrome://extensions
-          # as an unpacked extension. `dist` uploads the directory itself.
+          # `dist` uploads the directory itself so the artifact arrives as a
+          # complete unpacked extension tree.
           path: dist
           if-no-files-found: error
+
+  # P5 + P14: browser-level integration tests run as a separate job so they
+  # need Chromium + the browser binaries. They only run on one OS/Node combo
+  # to avoid duplicating the ~30 s browser install across the matrix.
+  e2e:
+    name: e2e (chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package-manager-version: '10'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Build extension
+        run: node scripts/build.mjs
+
+      - name: Run e2e extension tests
+        run: pnpm run test:e2e
+
+      - name: Run accessibility audit
+        run: pnpm run test:a11y

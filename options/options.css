@@ -28,6 +28,9 @@
   --edge: linear-gradient(120deg, var(--teal), var(--indigo) 52%, var(--violet));
   --font: "Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  /* P7: centralized ring circumference - shared with popup.css and the JS
+     that sets stroke-dashoffset. */
+  --ring-circumference: 251.3;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -178,7 +181,7 @@ body::-webkit-scrollbar-track { background: transparent; }
 .ring-track { fill: none; stroke: rgba(255, 255, 255, 0.09); stroke-width: 7; }
 .ring-progress {
   fill: none; stroke: url(#ssRingOptions); stroke-width: 7; stroke-linecap: round;
-  stroke-dasharray: 251.3; stroke-dashoffset: 251.3;
+  stroke-dasharray: var(--ring-circumference); stroke-dashoffset: var(--ring-circumference);
   transition: stroke-dashoffset 0.8s cubic-bezier(0.22, 0.8, 0.24, 1);
   filter: drop-shadow(0 0 7px rgba(109, 139, 255, 0.55));
 }

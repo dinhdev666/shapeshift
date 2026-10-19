@@ -75,7 +75,14 @@
       // table and its picker to the ISOLATED world (page_world_injector.js
       // inlines its own copy for the MAIN world). Both names would otherwise
       // be enumerable and give the extension away in one Object.keys() call.
-      'ssChromeStableVersions', 'ssPickChromeVersion'
+      'ssChromeStableVersions', 'ssPickChromeVersion',
+      // P7: the ring circumference constant is a UI layout value, not a config
+      // knob, but it is still an ss-prefixed global that Object.keys() would
+      // expose. It belongs in the same non-enumerable set.
+      'ssRingCircumference',
+      // P4: the worker shim builder is a content/worker_shim.js global that
+      // must not appear in Object.keys(globalThis).
+      'ssBuildWorkerShim'
     ];
 
     makeNonEnumerable.forEach(prop => {

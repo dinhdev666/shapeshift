@@ -263,7 +263,7 @@ function updateOverview(config) {
   keys.forEach(function (k) { if (config[k] !== false) on++; });
   const pct = Math.round((on / keys.length) * 100);
   const ring = $('overviewRing');
-  if (ring) ring.setAttribute('stroke-dashoffset', String(251.3 * (1 - pct / 100)));
+  if (ring) ring.setAttribute('stroke-dashoffset', String((globalThis.ssRingCircumference || 251.3) * (1 - pct / 100)));
   if ($('overviewScore')) $('overviewScore').textContent = String(pct);
   if ($('statSurfaces')) $('statSurfaces').textContent = String(on);
   if ($('overviewStatus')) $('overviewStatus').textContent = on === keys.length ? 'Full coverage' : on + ' of ' + keys.length + ' surfaces on';

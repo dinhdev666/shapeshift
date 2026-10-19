@@ -2009,18 +2009,11 @@
             : (navigator.deviceMemory || 8),
           platform: navigator.platform
         };
-        // Built once per load and prepended to every worker script, so a worker
-        // realm re-reads the same persona the page world reports. importScripts
-        // is the only way in - the extension ships no network API and the
-        // original script is loaded by the worker itself, not fetched here.
-        const WORKER_SHIM = [
-          '(function(){',
-          '  var P=' + JSON.stringify(workerPersona) + ';',
-          '  try{Object.defineProperty(navigator,"hardwareConcurrency",{get:function(){return P.hardwareConcurrency;},configurable:true});}catch(e){}',
-          '  try{Object.defineProperty(navigator,"deviceMemory",{get:function(){return P.deviceMemory;},configurable:true});}catch(e){}',
-          '  try{Object.defineProperty(navigator,"platform",{get:function(){return P.platform;},configurable:true});}catch(e){}',
-          '})();'
-        ].join(String.fromCharCode(10));
+        // P4: the worker shim template now lives in content/worker_shim.js,
+        // which defines globalThis.ssBuildWorkerShim. That file is injected
+        // before page_world_injector.js (see manifest.json MAIN-world scripts)
+        // and is independently testable by test.mjs.
+        const WORKER_SHIM = globalThis.ssBuildWorkerShim(workerPersona);
         const blobUrlFor = (url) => {
           const bootstrap = 'importScripts(' + JSON.stringify(String(url)) + ');' +
             String.fromCharCode(10) + WORKER_SHIM;
