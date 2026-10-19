@@ -3,7 +3,9 @@
   const installers = (globalThis.ssHookInstallers = globalThis.ssHookInstallers || []);
 
   installers.push(function installCanvasHooks (env) {
-    if (!env || !env.config?.enableCanvasNoise) return;
+    // FEAT-1: check the consistent enable*Protection flag first, fall back to
+    // the legacy enableCanvasNoise flag for backward compatibility.
+    if (!env || !(env.config?.enableCanvasProtection ?? env.config?.enableCanvasNoise)) return;
 
     // Default must match core/config.js (canvasNoiseStrength: 2) and the MAIN
     // world injector; a divergent literal here meant the same page received two
@@ -113,6 +115,44 @@
       ctxProto.getImageData = function (x, y, w, h) {
         return noisedImageData(this, x, y, w, h);
       };
+
+      // FEAT-5: OffscreenCanvas is a page-visible surface (worker + main thread)
+      // that the CanvasRenderingContext2D hooks never see. Patch the offscreen
+      // 2d context's getImageData with the same pixelNoise() so the deterministic
+      // noise is applied identically in both worlds. The page reads pixels from
+      // an OffscreenCanvas, so the MAIN-world injector also patches this - the
+      // ISOLATED copy is for consistency and self-test coverage.
+      const offscreenCtor = globalThis.OffscreenCanvasRenderingContext2D;
+      if (offscreenCtor && offscreenCtor.prototype && offscreenCtor.prototype.getImageData) {
+        if (globalThis.ssStealth && globalThis.ssStealth.isPatched(offscreenCtor.prototype)) {
+          // already installed
+        } else {
+          if (globalThis.ssStealth) globalThis.ssStealth.markPatched(offscreenCtor.prototype);
+          const offscreenProto = offscreenCtor.prototype;
+          const origOffscreenGetImageData = offscreenProto.getImageData;
+          offscreenProto.getImageData = function (x, y, w, h) {
+            if (globalThis.ssStatsTracker) {
+              globalThis.ssStatsTracker.increment('canvasReads');
+            }
+            if (globalThis.ssTimingUtils) {
+              globalThis.ssTimingUtils.randomDelaySync();
+              globalThis.ssTimingUtils.executionJitter();
+            }
+            const imgData = origOffscreenGetImageData.call(this, x, y, w, h);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+              data[i] += pixelNoise(i);
+              data[i + 1] += pixelNoise(i + 1);
+              data[i + 2] += pixelNoise(i + 2);
+            }
+            if (globalThis.ssTimingUtils) {
+              globalThis.ssTimingUtils.executionJitter();
+            }
+            return imgData;
+          };
+          log('[shapeshift][canvas] OffscreenCanvasRenderingContext2D.getImageData hooked');
+        }
+      }
 
       // Snapshot / noised copy / export / restore. Writing the noised pixels
       // straight back into the backing store permanently mutated the canvas, so

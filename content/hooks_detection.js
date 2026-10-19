@@ -236,5 +236,25 @@
 
       log('[shapeshift][detection] document.hidden and visibilityState hooked with timing resistance');
     });
+
+    // FEAT-8: when SharedArrayBuffer is available (cross-origin isolated
+    // documents), Atomics.wait becomes a high-resolution timing primitive.
+    // Apply the same deterministic jitter the other detection hooks use so a
+    // timing oracle cannot measure the wait duration. Guarded on existence so
+    // it is a no-op on builds where SAB is never exposed.
+    safeWrap(() => {
+      if (typeof SharedArrayBuffer === 'undefined' || !globalThis.Atomics || typeof globalThis.Atomics.wait !== 'function') return;
+      if (globalThis.ssStealth && globalThis.ssStealth.isPatched(globalThis.Atomics.wait)) return;
+      globalThis.ssStealth.markPatched(globalThis.Atomics.wait);
+
+      const origAtomicsWait = globalThis.Atomics.wait;
+      globalThis.Atomics.wait = function () {
+        if (globalThis.ssTimingUtils) {
+          globalThis.ssTimingUtils.randomDelaySync();
+        }
+        return origAtomicsWait.apply(this, arguments);
+      };
+      log('[shapeshift][detection] Atomics.wait hooked with timing resistance');
+    });
   });
 })();

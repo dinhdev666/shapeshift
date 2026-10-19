@@ -76,7 +76,7 @@
       const pageNoncePromise = waitForPageNonce(500);
 
       // Load stored config first (merges with defaults)
-      const config = await loadConfig();
+      let config = await loadConfig();
 
       // Check if current site is whitelisted (protection disabled)
       // P2: optional chaining does NOT protect an undeclared identifier - if
@@ -100,6 +100,25 @@
               console.log('[shapeshift][bootstrap] Protection disabled for this site (whitelisted)');
             }
             return null; // Skip hook installation
+          }
+
+          // FEAT-4: per-origin persona override. The global `persona` setting
+          // applies to every site, but some contexts need a specific OS family
+          // (e.g., a Windows-only web app). The per-origin value is read here
+          // and merged into the config BEFORE the env object is constructed so
+          // every downstream surface (UA-CH, WebGL, WebGPU, keyboard, etc.)
+          // sees the same override. The `:persona` seed key is unchanged — the
+          // persona only selects which tagged record to read, not how it is
+          // derived.
+          if (siteSetting && siteSetting.persona) {
+            const PERSONA_MODES = ['auto', 'windows', 'mac', 'linux'];
+            if (PERSONA_MODES.indexOf(siteSetting.persona) !== -1) {
+              const prevPersona = config.persona;
+              config = Object.assign({}, config, { persona: siteSetting.persona });
+              if (config.debug) {
+                console.log('[shapeshift][bootstrap] Per-origin persona override for', currentOrigin, ':', prevPersona, '→', siteSetting.persona);
+              }
+            }
           }
         } catch (e) {
           // Continue with protection if whitelist check fails

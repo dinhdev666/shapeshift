@@ -32,7 +32,7 @@
     // host candidate is gathered at all. The legacy booleans stay declared so a
     // stored config from an older build keeps working: both worlds derive the
     // same effective mode from them when `mode` is absent.
-    webrtc: { mode: 'block-host-srflx', blockIPLeak: true, randomizeSDP: true, forceRelay: false },
+    webrtc: { mode: 'block-host-srflx', blockIPLeak: true, forceRelay: false },
     enableMediaDeviceProtection: true,
     mediaDevices: { randomizeDeviceIds: true, spoofDeviceLabels: true },
     enableScreenProtection: true,
@@ -46,6 +46,14 @@
     enableMediaProtection: true,
     enableGeolocationProtection: true,
     geolocation: { noiseLevel: 0.001 },
+    // FEAT-1: canvas, WebGL, and audio previously used the inconsistent
+    // enableCanvasNoise / enableWebGLMasking / enableAudioNoise flags. The
+    // new enable*Protection flags follow the same convention as every other
+    // surface. ssClampConfig() maps the old flags to the new ones for backward
+    // compatibility, so the hooks can check a single key.
+    enableCanvasProtection: true,
+    enableWebGlProtection: true,
+    enableAudioProtection: true,
     enableDetectionResistance: true,
     // P2: the Options page and the hooks both referenced a timing-jitter knob
     // that never existed in the schema, so reading it always produced
@@ -80,7 +88,46 @@
     // Clearing the site's cookies and storage makes the new identity coherent
     // (new device AND new session), at the cost of logging the user out. It is
     // therefore opt-in and defaults to false.
-    clearSiteDataOnRotation: false
+    clearSiteDataOnRotation: false,
+    // FEAT-2: profile presets (Light / Balanced / Maximum) adjust multiple
+    // surface knobs at once without requiring the user to flip 12 switches.
+    // 'balanced' is the default behaviour described above; the other values
+    // are defined in ssConfigSchema.presets and applied by ssNormalizeConfig().
+    profile: 'balanced'
+  };
+
+  // FEAT-2: per-profile override maps. Each key is merged ON TOP of the
+  // balanced defaults, so only the values that actually change per profile
+  // need to appear here. The hooks read the final merged config, so the
+  // override takes effect on the next tab load without any hook-level changes.
+  const presets = {
+    light: {
+      canvasNoiseStrength: 1,
+      enableCanvasNoise: true,
+      enableCanvasProtection: true,
+      webglJitter: 1,
+      audioNoiseStrength: 1e-8,
+      enableAudioNoise: true,
+      enableAudioProtection: true,
+      timingJitter: 2,
+      useGaussianNoise: false
+    },
+    balanced: {},
+    maximum: {
+      canvasNoiseStrength: 4,
+      enableCanvasNoise: true,
+      enableCanvasProtection: true,
+      webglJitter: 5,
+      maskWebGLVendorStrings: true,
+      shuffleWebGLExtensions: true,
+      audioNoiseStrength: 5e-7,
+      enableAudioNoise: true,
+      enableAudioProtection: true,
+      timingJitter: 5,
+      useGaussianNoise: true,
+      perOriginFingerprint: true,
+      useStrongKDF: true
+    }
   };
 
   // Legacy flat option keys -> nested config groups. The Options page still
@@ -92,7 +139,6 @@
     shuffleLanguages: ['navigator', 'shuffleLanguages'],
     blockIPLeak: ['webrtc', 'blockIPLeak'],
     webrtcMode: ['webrtc', 'mode'],
-    randomizeSDP: ['webrtc', 'randomizeSDP'],
     forceRelay: ['webrtc', 'forceRelay'],
     randomizeDeviceIds: ['mediaDevices', 'randomizeDeviceIds'],
     spoofDeviceLabels: ['mediaDevices', 'spoofDeviceLabels'],
@@ -134,7 +180,8 @@
     defaults: defaults,
     flatDefaults: flatDefaults,
     flatToNested: flatToNested,
-    migrations: migrations
+    migrations: migrations,
+    presets: presets
   };
 
   // Convenience aliases so popup.js / options.js can render defaults without

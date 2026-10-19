@@ -136,6 +136,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  // P2 IMP-4: per-origin identity rotation - remove only the salt for the
+  // specific origin so the page-visible fingerprint changes on the next load
+  // while every other site keeps its existing identity.
+  if (message.type === 'ROTATE_ORIGIN') {
+    rotateOriginSalt(message.origin).then(() => {
+      sendResponse({ success: true });
+    }).catch(error => {
+      console.error('Failed to rotate origin salt:', error);
+      sendResponse({ success: false, error: error.message });
+    });
+    return true;
+  }
 });
 
 // Keyboard shortcuts (Feature 5.8): toggle protection or generate a new
@@ -266,9 +279,20 @@ async function applyStatistics(data, tabUrl, senderUrl) {
       }
     }
 
+    // P2 BUG-4: cap the visited-origins array so a power user does not bloat
+    // chrome.storage.local or the worker's in-memory Set. Keep the most recent
+    // MAX_PROTECTED_ORIGINS entries; the Set is rebuilt from the truncated array
+    // so older entries are evicted first when the cap is exceeded.
+    const MAX_PROTECTED_ORIGINS = 500;
+    let sitesArray = Array.from(sitesProtected);
+    if (sitesArray.length > MAX_PROTECTED_ORIGINS) {
+      sitesArray = sitesArray.slice(sitesArray.length - MAX_PROTECTED_ORIGINS);
+      sitesProtected = new Set(sitesArray);
+    }
+
     // Update counters
     stats = {
-      sitesProtectedArray: Array.from(sitesProtected),
+      sitesProtectedArray: sitesArray,
       sitesProtected: sitesProtected.size,
       totalCanvasReads: (stats.totalCanvasReads || 0) + (data.canvasReads || 0),
       totalWebGLCalls: (stats.totalWebGLCalls || 0) + (data.webglCalls || 0),
@@ -369,6 +393,42 @@ async function checkAndRotateFingerprint() {
     const nextRotation = new Date(lastRotation.getTime() + intervalMs);
     const timeUntil = nextRotation - now;
     console.log(`[ShapeShift Rotation] Next rotation in ${Math.round(timeUntil / 1000 / 60)} minutes`);
+  }
+
+  // FEAT-3: per-origin rotation scheduling. Each origin in ss_site_settings can
+  // override the global intervalHours. Origins that haven't been rotated long
+  // enough are skipped; those that have get rotateOriginSalt() (their salt is
+  // removed, the tab generation is bumped, and the bfcache guard reloads the
+  // tab on next activation). This is independent of the global rotation above.
+  const siteResult = await chrome.storage.local.get(['ss_site_settings']);
+  const siteSettings = siteResult.ss_site_settings || {};
+  const origins = Object.keys(siteSettings);
+  const nowMs = Date.now();
+  for (let i = 0; i < origins.length; i++) {
+    const origin = origins[i];
+    const entry = siteSettings[origin];
+    if (!entry || entry.rotationHours == null) continue;
+
+    const originIntervalHours = Math.max(0.5, Number(entry.rotationHours));
+    const originIntervalMs = originIntervalHours * 60 * 60 * 1000;
+    const originLastRotation = entry.lastRotation ? new Date(entry.lastRotation).getTime() : 0;
+    const originTimeSince = nowMs - originLastRotation;
+
+    if (originTimeSince < originIntervalMs) continue;
+
+    console.log(`[ShapeShift Rotation] Per-origin rotation due for ${origin} (${originIntervalHours}h interval)`);
+    let rotationError = null;
+    try {
+      await rotateOriginSalt(origin);
+      // Record the rotation time on the site settings entry.
+      const updated = Object.assign({}, entry, { lastRotation: new Date().toISOString() });
+      await chrome.storage.local.set({ ss_site_settings: Object.assign({}, siteSettings, { [origin]: updated }) });
+    } catch (e) {
+      rotationError = e;
+    }
+    if (rotationError) {
+      console.error('[ShapeShift Rotation] Per-origin rotation failed for', origin, rotationError);
+    }
   }
 }
 
@@ -506,6 +566,42 @@ async function rotateFingerprintNow() {
   } catch (error) {
     console.error('[ShapeShift Rotation] Failed to rotate fingerprint:', error);
   }
+}
+
+// P2 IMP-4: per-origin identity rotation. Remove only the salt for the given
+// origin so the page-visible fingerprint changes on the next load while every
+// other site keeps its existing identity. The per-tab generation stamp is also
+// bumped so the bfcache staleness guard reloads the tab. This reuses the same
+// salt-key naming convention as salts.js ("ss_salt:<origin>") and the same
+// bumpSaltGeneration() guard as the full rotation path, but skips the global
+// salt wipe, the browsing-data clear, and the bulk tab reload.
+async function rotateOriginSalt(origin) {
+  if (!origin) throw new Error('No origin provided for rotation');
+
+  const saltKey = 'ss_salt:' + origin;
+  await chrome.storage.local.remove(saltKey);
+
+  await bumpSaltGeneration();
+
+  // Bump the per-tab generation stamp for any tab at this origin so the
+  // bfcache guard (service-worker.js salt-change alarm) reloads it on next
+  // activation if it is sitting in the back/forward cache.
+  const tabs = await chrome.tabs.query({ url: origin + '/*' });
+  const tabStamps = {};
+  const genKeys = tabs
+    .filter(function (t) { return typeof t.id === 'number'; })
+    .map(function (t) { return 'ss_tab_gen_' + t.id; });
+  if (genKeys.length > 0) {
+    const existing = await chrome.storage.session.get(genKeys);
+    const now = Date.now();
+    genKeys.forEach(function (k) {
+      tabStamps[k] = (existing[k] || 0) + 1;
+      void now; // generation stamp is monotonically bumped, not time-based
+    });
+    await chrome.storage.session.set(tabStamps);
+  }
+
+  console.log('[ShapeShift Rotation] Per-origin salt rotated for:', origin);
 }
 
 // Get rotation status (for UI)

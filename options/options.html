@@ -123,6 +123,28 @@
             <button class="btn ghost" id="addSiteBtn" type="button">Pause on this site</button>
           </div>
         </div>
+        <div class="card">
+          <div class="card-head"><h3>Per-origin overrides</h3><span class="muted">Custom rotation and persona for specific sites</span></div>
+          <div id="overrideList" class="rows"></div>
+          <div class="site-add">
+            <input type="text" id="overrideSiteInput" placeholder="example.com" autocomplete="off" spellcheck="false">
+            <select id="overrideRotationHours" class="input--small">
+              <option value="">No auto-rotation</option>
+              <option value="0.5">Every 30 min</option>
+              <option value="1">Every 1 hour</option>
+              <option value="6">Every 6 hours</option>
+              <option value="12">Every 12 hours</option>
+              <option value="24">Every 24 hours</option>
+            </select>
+            <select id="overridePersona" class="input--small">
+              <option value="">Auto persona</option>
+              <option value="windows">Windows</option>
+              <option value="mac">macOS</option>
+              <option value="linux">Linux</option>
+            </select>
+            <button class="btn ghost" id="addOverrideBtn" type="button">Add override</button>
+          </div>
+        </div>
       </section>
 
       <section class="panel" id="panel-advanced">

@@ -55,7 +55,7 @@
     canvasNoiseStrength: [0, 10],
     webglJitter: [0, 10],
     audioNoiseStrength: [0, 1],
-    kdfIterations: [1, 100000],
+    kdfIterations: [1, 200000],
     rotationIntervalHours: [0.5, 8760]
   };
   // P2 7.4 (persona profile): the only top-level STRING key in the config.
@@ -73,6 +73,8 @@
     'enableSensorProtection', 'enableTouchProtection', 'enableUserAgentProtection',
     'enableMediaProtection', 'enableGeolocationProtection', 'enableDetectionResistance',
     'enableWebGPUProtection', 'enableKeyboardProtection',
+    // FEAT-1: per-surface protection toggles for canvas, WebGL and audio.
+    'enableCanvasProtection', 'enableWebGlProtection', 'enableAudioProtection',
     'useStrongKDF', 'useGaussianNoise', 'autoRotateFingerprint', 'rotateOnStartup'
   ];
   // P1 2.14: the group loop used to copy every boolean/number key it found, so
@@ -96,7 +98,7 @@
   };
   const CONFIG_GROUP_BOOLEAN_KEYS = {
     navigator: ['fuzzHardwareConcurrency', 'fuzzDeviceMemory', 'shuffleLanguages'],
-    webrtc: ['blockIPLeak', 'randomizeSDP', 'forceRelay'],
+    webrtc: ['blockIPLeak', 'forceRelay'],
     mediaDevices: ['randomizeDeviceIds', 'spoofDeviceLabels'],
     screen: ['useRealDistribution'],
     sensors: ['hideGamepads'],
@@ -233,15 +235,49 @@
     // The category name is validated on the receiving side, and the message
     // carries no page data - only a fixed label - so nothing about the page
     // leaks through it.
-    function bumpStat(category) {
+    //
+    // P2 BUG-5: every read used to postMessage immediately, so a fingerprinting
+    // library reading getImageData in a tight loop forced one post + one event
+    // dispatch per read. Accumulate counts in a Map and flush on a 500 ms timer
+    // (plus pagehide/beforeunload), cutting the message rate by orders of
+    // magnitude while keeping the counters real-time enough for the popup.
+    const statBuffer = new Map();
+    let statFlushTimer = null;
+    const STAT_FLUSH_MS = 500;
+
+    function flushStatBuffer() {
+      if (statFlushTimer) {
+        clearTimeout(statFlushTimer);
+        statFlushTimer = null;
+      }
+      if (statBuffer.size === 0) return;
+      const counts = {};
+      statBuffer.forEach(function (value, key) {
+        counts[key] = value;
+      });
+      statBuffer.clear();
       try {
         window.postMessage({
           type: 'SS_STAT',
           protocol: 1,
-          category: category
+          counts: counts
         }, location.origin);
       } catch (e) { /* never break a hook over a counter */ }
     }
+
+    function bumpStat(category) {
+      statBuffer.set(category, (statBuffer.get(category) || 0) + 1);
+      if (!statFlushTimer) {
+        statFlushTimer = setTimeout(flushStatBuffer, STAT_FLUSH_MS);
+      }
+    }
+
+    window.addEventListener('pagehide', function () {
+      flushStatBuffer();
+    });
+    window.addEventListener('beforeunload', function () {
+      flushStatBuffer();
+    });
 
     log('[shapeshift][page] Initializing page-world hooks with config:', config);
 
@@ -281,7 +317,8 @@
     // ========================================================================
     // CANVAS HOOKS
     // ========================================================================
-    if (config.enableCanvasNoise) {
+    // FEAT-1: check new enableCanvasProtection first, fall back to legacy flag.
+    if (config.enableCanvasProtection ?? config.enableCanvasNoise) {
       try {
         // Must match core/config.js (canvasNoiseStrength: 2) and the ISOLATED
         // hooks so both worlds apply the same magnitude.
@@ -407,10 +444,15 @@
         // HTMLCanvasElement hooks above never see. getImageData is the read
         // surface; the export methods consume the backing store, so only the
         // returned pixels are noised here (no restore dance needed).
+        // FEAT-5: createImageBitmap is an async factory that copies canvas
+        // pixels into a new ImageBitmap without going through getImageData, so
+        // it bypasses the per-context pixel hook. Hoist the original method so
+        // both patches can read raw pixels and apply pixelNoise once.
+        let origOffscreenGetImageData = null;
         const offscreenProto = window.OffscreenCanvasRenderingContext2D &&
           window.OffscreenCanvasRenderingContext2D.prototype;
         if (offscreenProto && offscreenProto.getImageData) {
-          const origOffscreenGetImageData = offscreenProto.getImageData;
+          origOffscreenGetImageData = offscreenProto.getImageData;
           offscreenProto.getImageData = function (x, y, w, h) {
             bumpStat('canvasReads');
             const imgData = origOffscreenGetImageData.call(this, x, y, w, h);
@@ -421,6 +463,44 @@
               data[i + 2] += pixelNoise(i + 2);
             }
             return imgData;
+          };
+        }
+
+        // FEAT-5: wrap createImageBitmap so any bitmap originating from a
+        // canvas is perturbed at creation time, reading raw pixels via the
+        // original offscreen getImageData and applying the same pixelNoise.
+        if (typeof createImageBitmap === 'function' &&
+            globalThis.ssStealth && !globalThis.ssStealth.isPatched(window.createImageBitmap)) {
+          globalThis.ssStealth.markPatched(window.createImageBitmap);
+          const origCreateImageBitmap = window.createImageBitmap;
+          window.createImageBitmap = function () {
+            bumpStat('canvasReads');
+            return origCreateImageBitmap.apply(this, arguments).then(function (bitmap) {
+              if (bitmap && typeof bitmap.width === 'number' && typeof bitmap.height === 'number' && origOffscreenGetImageData) {
+                const bw = bitmap.width;
+                const bh = bitmap.height;
+                try {
+                  const oc = new OffscreenCanvas(bw, bh);
+                  const octx = oc.getContext('2d');
+                  if (octx) {
+                    octx.transferFromImageBitmap(bitmap);
+                    const id = origOffscreenGetImageData.call(octx, 0, 0, bw, bh);
+                    const data = id.data;
+                    for (let i = 0; i < data.length; i += 4) {
+                      data[i] += pixelNoise(i);
+                      data[i + 1] += pixelNoise(i + 1);
+                      data[i + 2] += pixelNoise(i + 2);
+                    }
+                    octx.putImageData(id, 0, 0);
+                    return octx.transferToImageBitmap();
+                  }
+                } catch (e) {
+                  // Offscreen creation may fail in some contexts; return the
+                  // original bitmap rather than breaking the page.
+                }
+              }
+              return bitmap;
+            });
           };
         }
 
@@ -764,7 +844,8 @@
     // ========================================================================
     // WEBGL HOOKS
     // ========================================================================
-    if (config.enableWebGLMasking) {
+    // FEAT-1: check new enableWebGlProtection first, fall back to legacy flag.
+    if (config.enableWebGlProtection ?? config.enableWebGLMasking) {
       try {
         const jitter = config.webglJitter ?? 2;
         // P0: parameters whose exact value IS the fingerprint (hardware limits,
@@ -1055,7 +1136,8 @@
     // ========================================================================
     // AUDIO HOOKS
     // ========================================================================
-    if (config.enableAudioNoise) {
+    // FEAT-1: check new enableAudioProtection first, fall back to legacy flag.
+    if (config.enableAudioProtection ?? config.enableAudioNoise) {
       try {
         const audioNoiseStrength = config.audioNoiseStrength ?? 1e-7;
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -1474,6 +1556,32 @@
           });
         }
 
+        // FEAT-7: performance.measureUserAgentSpecificMemory() is the modern
+        // replacement for the deprecated performance.memory getter (Chrome 91+).
+        // It returns a Promise, so wrap it and perturb `bytes` on the resolved
+        // result, keyed on (seed, base-bytes) to stay deterministic.
+        if (typeof performance.measureUserAgentSpecificMemory === 'function') {
+          const origMeasureMem = performance.measureUserAgentSpecificMemory;
+          const memBaseBytes = performance.memory ? (performance.memory.usedJSHeapSize || 10000000) : 10000000;
+          const memBytesNoise = Math.floor(memBaseBytes * 0.1);
+          Object.defineProperty(performance, 'measureUserAgentSpecificMemory', {
+            value: function () {
+              bumpStat('sensorReads');
+              return origMeasureMem.call(this).then(function (result) {
+                if (!result || typeof result !== 'object') return result;
+                const noiseHash = hashString(seed + ':membytes:' + memBaseBytes);
+                const perturbedBytes = Math.max(0, result.bytes + ((noiseHash / 4294967296) - 0.5) * memBytesNoise * 2);
+                return {
+                  bytes: Math.floor(perturbedBytes),
+                  breakdown: result.breakdown || [],
+                  callable: result.callable
+                };
+              });
+            },
+            enumerable: false, configurable: true
+          });
+        }
+
         const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
         if (connection) {
           const connectionTypes = ['4g', '4g', '4g', 'wifi', 'wifi'];
@@ -1706,9 +1814,6 @@
         const chromeVersion = versionCandidates[buildHash % versionCandidates.length];
         const versionParts = chromeVersion.split('.');
         const major = versionParts[0];
-        const minor = versionParts[1];
-        const build = versionParts[2];
-        const patch = versionParts[3];
         const uaGet = () =>
           'Mozilla/5.0 (' + persona.ua + ') AppleWebKit/537.36 (KHTML, like Gecko) Chrome/' +
           chromeVersion + ' Safari/537.36';
@@ -2266,7 +2371,13 @@
     if (config.enableDetectionResistance) {
       try {
         Object.defineProperty(navProto, 'webdriver', {
-          get: () => false, enumerable: false, configurable: true
+          get: () => {
+            if (globalThis.ssTimingUtils) {
+              globalThis.ssTimingUtils.randomDelaySync();
+            }
+            return false;
+          },
+          enumerable: false, configurable: true
         });
 
         // P1 4.1: performance.getEntriesByType was ISOLATED-only, so the page
@@ -2364,6 +2475,21 @@
           });
         }
 
+        // FEAT-8: when SharedArrayBuffer is available (cross-origin isolated
+        // documents), Atomics.wait becomes a high-resolution timing primitive.
+        // Wrap it so the deterministic jitter from ssTimingUtils is applied,
+        // making the wait duration unpredictable to a timing oracle. This is
+        // defensive: if SAB is never enabled, the code path never fires.
+        if (typeof SharedArrayBuffer !== 'undefined' && globalThis.Atomics && globalThis.Atomics.wait) {
+          const origAtomicsWait = globalThis.Atomics.wait;
+          globalThis.Atomics.wait = function (typedArray, index, value, timeout) {
+            if (globalThis.ssTimingUtils) {
+              globalThis.ssTimingUtils.randomDelaySync();
+            }
+            return origAtomicsWait.call(this, typedArray, index, value, timeout);
+          };
+        }
+
         log('[shapeshift][page][detection] Hooks installed');
       } catch (e) {
         log('[shapeshift][page][detection] Failed:', e);
@@ -2429,6 +2555,8 @@
       registerNative(window.AnalyserNode && window.AnalyserNode.prototype, 'getByteFrequencyData');
       registerNative(window.OffscreenCanvasRenderingContext2D &&
         window.OffscreenCanvasRenderingContext2D.prototype, 'getImageData');
+      registerNative(window.OffscreenCanvas && window.OffscreenCanvas.prototype, 'getContext');
+      registerNative(window, 'createImageBitmap');
       registerNative(navigator.mediaDevices, 'enumerateDevices');
       registerNative(navigator.storage, 'estimate');
       registerNative(navigator.permissions, 'query');

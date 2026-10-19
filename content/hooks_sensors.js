@@ -128,6 +128,40 @@
       }
     });
 
+    // FEAT-7: performance.measureUserAgentSpecificMemory() is the modern
+    // replacement for the deprecated performance.memory getter. It returns a
+    // Promise<{ bytes, breakdown, callable }> and is available in Chrome 91+.
+    // The page can read `bytes` directly, so the MAIN world owns the patch;
+    // the ISOLATED copy mirrors it for the self-test report.
+    safeWrap(() => {
+      if (typeof performance.measureUserAgentSpecificMemory !== 'function') return;
+
+      const origMeasureMem = performance.measureUserAgentSpecificMemory;
+      const baseBytes = performance.memory ? (performance.memory.usedJSHeapSize || 10000000) : 10000000;
+      const memBytesNoise = Math.floor(baseBytes * 0.1);
+
+      Object.defineProperty(performance, 'measureUserAgentSpecificMemory', {
+        value: function () {
+          if (globalThis.ssTimingUtils) {
+            globalThis.ssTimingUtils.randomDelaySync();
+          }
+          globalThis.ssStatsTracker.increment('sensorReads');
+          return origMeasureMem.call(this).then(function (result) {
+            if (!result || typeof result !== 'object') return result;
+            const noiseHash = hashString ? hashString(sensorSeed + ':membytes:' + baseBytes) : 0;
+            const perturbedBytes = Math.max(0, result.bytes + ((noiseHash / 4294967296) - 0.5) * memBytesNoise * 2);
+            return {
+              bytes: Math.floor(perturbedBytes),
+              breakdown: result.breakdown || [],
+              callable: result.callable
+            };
+          });
+        },
+        enumerable: false, configurable: true
+      });
+      log('[shapeshift][sensors] performance.measureUserAgentSpecificMemory hooked');
+    });
+
     // P1 2.4: performance.now() jittering was removed entirely. It ran in the
     // ISOLATED world, where the page never observes it - so it protected
     // nothing. Porting it to the MAIN world would be worse than useless: a
@@ -173,7 +207,7 @@
             if (globalThis.ssTimingUtils) {
               globalThis.ssTimingUtils.randomDelaySync();
             }
-            return spoofedDownlink + fieldNoise('downlink', spoofedDownlink, 1);
+            return spoofedDownlink;
           },
           enumerable: false,
           configurable: true

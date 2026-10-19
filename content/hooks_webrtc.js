@@ -154,8 +154,7 @@
               // (as this file used to, and as MAIN world already stopped doing)
               // makes the SDP inconsistent with what the browser will actually
               // negotiate: ICE never authenticates, DTLS never validates the peer
-              // certificate, and every real call silently fails. `randomizeSDP`
-              // therefore no longer touches the credential lines; the SDP it can
+              // certificate, and every real call silently fails. The SDP it can
               // still safely scrub is the candidate list above.
 
               // P1 2.13: hand back a real RTCSessionDescription. A plain

@@ -126,6 +126,55 @@ assert('plain keys pass through untouched', normalized.canvasNoiseStrength === 4
 const empty = config.ssNormalizeConfig(null);
 assert('normalization tolerates null', empty && typeof empty === 'object' && Object.keys(empty).length === 0);
 
+// FEAT-1: backward-compat mapping from legacy surface flags to the consistent
+// enable*Protection convention. An old stored config that only has the legacy
+// flags must gain the new keys with the same values.
+const legacy = config.ssNormalizeConfig({
+  enableCanvasNoise: false,
+  enableWebGLMasking: true,
+  enableAudioNoise: false
+});
+assert('legacy enableCanvasNoise maps to enableCanvasProtection', legacy.enableCanvasProtection === false, String(legacy.enableCanvasProtection));
+assert('legacy enableWebGLMasking maps to enableWebGlProtection', legacy.enableWebGlProtection === true, String(legacy.enableWebGlProtection));
+assert('legacy enableAudioNoise maps to enableAudioProtection', legacy.enableAudioProtection === false, String(legacy.enableAudioProtection));
+// When both old and new are present, the new value wins (no overwrite).
+const both = config.ssNormalizeConfig({ enableCanvasNoise: false, enableCanvasProtection: true });
+assert('new flag is not overwritten by legacy flag', both.enableCanvasProtection === true, String(both.enableCanvasProtection));
+// Schema defaults include the new protection flags.
+assert('config schema has enableCanvasProtection default', config.ssConfigSchema.defaults.enableCanvasProtection === true);
+assert('config schema has enableWebGlProtection default', config.ssConfigSchema.defaults.enableWebGlProtection === true);
+assert('config schema has enableAudioProtection default', config.ssConfigSchema.defaults.enableAudioProtection === true);
+
+// FEAT-2: profile presets adjust surface knobs. The 'light' preset lowers noise
+// and strength; the 'maximum' preset raises them. A user's explicit value for a
+// key must win over the preset default.
+const lightProfile = config.ssNormalizeConfig({ profile: 'light' });
+assert('light preset lowers canvasNoiseStrength', lightProfile.canvasNoiseStrength === 1, String(lightProfile.canvasNoiseStrength));
+assert('light preset lowers webglJitter', lightProfile.webglJitter === 1, String(lightProfile.webglJitter));
+assert('light preset lowers audioNoiseStrength', lightProfile.audioNoiseStrength === 1e-8, String(lightProfile.audioNoiseStrength));
+assert('light preset disables gaussian noise', lightProfile.useGaussianNoise === false, String(lightProfile.useGaussianNoise));
+
+const maxProfile = config.ssNormalizeConfig({ profile: 'maximum' });
+assert('maximum preset raises canvasNoiseStrength', maxProfile.canvasNoiseStrength === 4, String(maxProfile.canvasNoiseStrength));
+assert('maximum preset raises webglJitter', maxProfile.webglJitter === 5, String(maxProfile.webglJitter));
+assert('maximum preset enables strong KDF', maxProfile.useStrongKDF === true, String(maxProfile.useStrongKDF));
+
+// Balanced profile is a no-op: no overrides applied, defaults preserved.
+const balancedProfile = config.ssNormalizeConfig({ profile: 'balanced' });
+// Balanced preset has no overrides: the key is untouched by normalization
+// (ssLoadConfig merges defaults at runtime), so it should be absent.
+assert('balanced preset does not override canvasNoiseStrength', balancedProfile.canvasNoiseStrength === undefined, String(balancedProfile.canvasNoiseStrength));
+
+// Explicit user values survive preset application.
+const explicitOverride = config.ssNormalizeConfig({ profile: 'maximum', canvasNoiseStrength: 8 });
+assert('explicit user value beats preset', explicitOverride.canvasNoiseStrength === 8, String(explicitOverride.canvasNoiseStrength));
+
+// Preset schema exists on the schema object.
+assert('config schema exports presets object', typeof config.ssConfigSchema.presets === 'object');
+assert('preset has light profile', typeof config.ssConfigSchema.presets.light === 'object');
+assert('preset has balanced profile', typeof config.ssConfigSchema.presets.balanced === 'object');
+assert('preset has maximum profile', typeof config.ssConfigSchema.presets.maximum === 'object');
+
 section('defaults alignment');
 // The ISOLATED hooks, the MAIN-world injector and the options UI each used to
 // carry their own copy of these numbers; a drifted default meant two different

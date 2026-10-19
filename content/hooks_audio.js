@@ -3,7 +3,9 @@
   const installers = (globalThis.ssHookInstallers = globalThis.ssHookInstallers || []);
 
   installers.push(function installAudioHooks (env) {
-    if (!env || !env.config?.enableAudioNoise) return;
+    // FEAT-1: check the consistent enable*Protection flag first, fall back to
+    // the legacy enableAudioNoise flag for backward compatibility.
+    if (!env || !(env.config?.enableAudioProtection ?? env.config?.enableAudioNoise)) return;
     const { noise, config } = env;
     const strength = config.audioNoiseStrength ?? 1e-7;
     const seed = (env.seed >>> 0) || 0;

@@ -120,12 +120,33 @@
     if (event.origin !== location.origin) return;
     const data = event.data;
     if (!data || data.type !== 'SS_STAT' || data.protocol !== 1) return;
-    increment(data.category);
+    if (data.counts) {
+      // Batched format from the MAIN world: page_world_injector.js accumulates
+      // counts in a Map and flushes them every 500 ms. Fold each category in
+      // directly to avoid N increment() calls on a hot path.
+      Object.keys(data.counts).forEach(function (category) {
+        if (Object.prototype.hasOwnProperty.call(localStats, category)) {
+          localStats[category] += data.counts[category];
+        }
+      });
+      scheduleFlush();
+    } else {
+      increment(data.category);
+    }
   });
 
   // Export to global scope
   globalThis.ssStatsTracker = {
     increment,
+    batchIncrement: function (counts) {
+      if (!counts || typeof counts !== 'object') return;
+      Object.keys(counts).forEach(function (category) {
+        if (Object.prototype.hasOwnProperty.call(localStats, category)) {
+          localStats[category] += counts[category];
+        }
+      });
+      scheduleFlush();
+    },
     flush: flushStats
   };
 })();

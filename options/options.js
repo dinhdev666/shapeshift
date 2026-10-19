@@ -9,13 +9,16 @@ const DEFAULTS = globalThis.ssFlatDefaults || {};
 const GROUPS = {
   groupSurfaces: [
     { key: 'enableCanvasNoise', name: 'Canvas noise', desc: 'Perturb rendered pixels so canvas hashes differ per origin.' },
+    { key: 'enableCanvasProtection', name: 'Canvas protection', desc: 'Master toggle for canvas fingerprint spoofing.' },
     { key: 'canvasNoiseStrength', name: 'Canvas strength', desc: 'Pixel delta applied to canvas reads.', range: [0, 10, 0.1] },
     { key: 'enableWebGLMasking', name: 'WebGL masking', desc: 'Alter GPU parameters, vendor and renderer strings.' },
+    { key: 'enableWebGlProtection', name: 'WebGL protection', desc: 'Master toggle for WebGL fingerprint spoofing.' },
     { key: 'webglJitter', name: 'WebGL jitter', desc: 'Amount of jitter applied to WebGL parameters.', range: [0, 10, 0.1] },
     { key: 'maskWebGLVendorStrings', name: 'Mask vendor strings', desc: 'Replace GPU vendor and renderer with plausible values.' },
     { key: 'shuffleWebGLExtensions', name: 'Shuffle extensions', desc: 'Randomise extension enumeration order.' },
     { key: 'enableWebGPUProtection', name: 'WebGPU masking', desc: 'Report the same GPU persona through navigator.gpu.' },
     { key: 'enableKeyboardProtection', name: 'Keyboard layout', desc: 'Report a keyboard layout that matches the user-agent persona.' },
+    { key: 'enableAudioProtection', name: 'Audio protection', desc: 'Master toggle for audio fingerprint spoofing.' },
     { key: 'enableAudioNoise', name: 'Audio noise', desc: 'Subtle offsets in AudioContext sample data.' },
     { key: 'audioNoiseStrength', name: 'Audio strength', desc: 'Magnitude of audio sample perturbation.', number: true },
     { key: 'enableFontProtection', name: 'Font protection', desc: 'Blunt font enumeration and measurement.' }
@@ -37,6 +40,11 @@ const GROUPS = {
   ],
   groupIdentity: [
     { key: 'perOriginFingerprint', name: 'Per-origin fingerprints', desc: 'Derive an independent seed for every site.' },
+    // FEAT-2: profile presets adjust multiple surface knobs at once. 'balanced'
+    // is the default; 'light' reduces noise/strength for performance, and
+    // 'maximum' raises them for stronger spoofing. Selecting a preset fills in
+    // only the keys it overrides — explicit user edits still win.
+    { key: 'profile', name: 'Protection profile', desc: 'Preset that adjusts noise levels and surface coverage.', enum: true, select: [['balanced', 'Balanced (default)'], ['light', 'Light (lower performance impact)'], ['maximum', 'Maximum (strongest spoofing)']] },
     // P2 7.4 (persona profile): 'auto' keeps the seed-derived OS family, the
     // three explicit values pin it so the UA platform, the WebGL renderer, the
     // WebGPU adapter and the keyboard layout all describe one real machine.
@@ -55,7 +63,7 @@ const GROUPS = {
   ],
   groupCrypto: [
     { key: 'useStrongKDF', name: 'Strong key derivation', desc: 'Iterated hashing when deriving per-origin seeds.' },
-    { key: 'kdfIterations', name: 'KDF iterations', desc: 'Higher is slower and harder to brute force.', number: true },
+    { key: 'kdfIterations', name: 'KDF iterations', desc: 'Higher is slower and harder to brute force.', range: [1, 200000, 100] },
     { key: 'enableTouchProtection', name: 'Touch protection', desc: 'Normalise touch capability signals.' },
     { key: 'enableUserAgentProtection', name: 'User agent protection', desc: 'Reduce user-agent entropy.' },
     { key: 'enableMediaProtection', name: 'Media codec protection', desc: 'Blunt codec and DRM capability probing.' },
@@ -199,7 +207,7 @@ const NUMERIC_BOUNDS = {
   canvasNoiseStrength: [0, 10],
   webglJitter: [0, 10],
   audioNoiseStrength: [0, 1],
-  kdfIterations: [1, 100000],
+  kdfIterations: [1, 200000],
   rotationIntervalHours: [0.5, 8760]
 };
 
@@ -373,8 +381,40 @@ async function renderSelfTest() {
   ['canvas', 'webgl', 'audio', 'navigator'].forEach(function (key) {
     if (parts[key]) host.appendChild(diagnosticRow(labels[key], parts[key]));
   });
-  host.appendChild(diagnosticRow('Composite', report.composite || 'unavailable'));
+  const compositeRow = diagnosticRow('Composite', report.composite || 'unavailable');
+  host.appendChild(compositeRow);
   host.appendChild(diagnosticRow('Target', tab.url || 'unknown'));
+
+  // IMP-7: add a "Copy fingerprint hash" button after the composite digest so
+  // a user can paste it into a threat-intel query or bug report. Uses
+  // navigator.clipboard.writeText; falls back to execCommand('copy') when the
+  // Permissions Policy blocks the async clipboard API.
+  const compositeValue = report.composite || '';
+  if (compositeValue) {
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'btn ghost';
+    copyBtn.textContent = 'Copy hash';
+    copyBtn.addEventListener('click', async function () {
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(compositeValue);
+        } else {
+          const ta = document.createElement('textarea');
+          ta.value = compositeValue;
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        }
+        copyBtn.textContent = 'Copied!';
+        setTimeout(function () { copyBtn.textContent = 'Copy hash'; }, 2000);
+      } catch (e) {
+        copyBtn.textContent = 'Denied';
+        setTimeout(function () { copyBtn.textContent = 'Copy hash'; }, 2000);
+      }
+    });
+    host.appendChild(copyBtn);
+  }
 
   const warnings = Array.isArray(report.warnings) ? report.warnings : [];
   if (warnings.length) {
@@ -484,6 +524,64 @@ async function renderSites() {
   });
 }
 
+
+async function renderOverrides() {
+  const host = $('overrideList');
+  if (!host) return;
+  host.textContent = '';
+  const store = (await get(['ss_site_settings'])).ss_site_settings || {};
+  const origins = Object.keys(store);
+  const overrides = origins.filter(function (o) {
+    const e = store[o];
+    return e && (e.rotationHours != null || (e.persona && e.persona !== 'auto'));
+  });
+  if (!overrides.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No per-origin overrides set. Add one above.';
+    host.appendChild(empty);
+    return;
+  }
+  overrides.forEach(function (origin) {
+    const item = document.createElement('div');
+    item.className = 'site-item';
+    const text = document.createElement('div');
+    const strong = document.createElement('strong');
+    strong.textContent = origin;
+    const span = document.createElement('span');
+    const parts = [];
+    const e = store[origin];
+    if (e.rotationHours != null) parts.push('rotate every ' + e.rotationHours + 'h');
+    if (e.persona) parts.push('persona: ' + e.persona);
+    span.textContent = parts.join(', ');
+    text.appendChild(strong);
+    text.appendChild(span);
+    const btn = document.createElement('button');
+    btn.className = 'btn ghost';
+    btn.type = 'button';
+    btn.textContent = 'Clear';
+    btn.addEventListener('click', async function () {
+      const current = (await get(['ss_site_settings'])).ss_site_settings || {};
+      if (current[origin]) {
+        delete current[origin].rotationHours;
+        delete current[origin].persona;
+        // If no other overrides remain, remove the entry entirely (which means
+        // protection is ON for this origin, the default).
+        const keys = Object.keys(current[origin]);
+        if (keys.length === 0 || (keys.length === 1 && keys[0] === 'enabled' && current[origin].enabled !== false)) {
+          delete current[origin];
+        }
+      }
+      await set({ ss_site_settings: current });
+      toast('Override removed for ' + origin);
+      renderOverrides();
+    });
+    item.appendChild(text);
+    item.appendChild(btn);
+    host.appendChild(item);
+  });
+}
+
 async function main() {
   const stored = (await get(['ssConfig'])).ssConfig || {};
   const config = Object.assign({}, DEFAULTS, stored);
@@ -492,6 +590,7 @@ async function main() {
   updateOverview(config);
   refreshStats();
   renderSites();
+  renderOverrides();
   // Populate the Hook health card on load too. renderDiagnostics() was only
   // reachable from the Advanced nav click and the Refresh button, so the pane
   // showed placeholder text until the user interacted with it.
@@ -676,6 +775,33 @@ async function main() {
     });
   }
 
+
+  if ($('addOverrideBtn')) {
+    $('addOverrideBtn').addEventListener('click', async function () {
+      const input = $('overrideSiteInput');
+      const raw = (input.value || '').trim().toLowerCase();
+      if (!raw) return;
+      let origin;
+      try { origin = new URL(/^https?:/.test(raw) ? raw : 'https://' + raw).origin; }
+      catch (e) { toast('Enter a valid domain'); return; }
+      const store = (await get(['ss_site_settings'])).ss_site_settings || {};
+      const entry = store[origin] || { enabled: true };
+      const rotHours = $('overrideRotationHours').value;
+      const personaVal = $('overridePersona').value;
+      if (rotHours) entry.rotationHours = Number(rotHours);
+      else delete entry.rotationHours;
+      if (personaVal) entry.persona = personaVal;
+      else delete entry.persona;
+      entry.enabled = true;
+      store[origin] = entry;
+      await set({ ss_site_settings: store });
+      input.value = '';
+      $('overrideRotationHours').value = '';
+      $('overridePersona').value = '';
+      toast('Override saved for ' + origin);
+      renderOverrides();
+    });
+  }
   if ($('addSiteBtn')) {
     $('addSiteBtn').addEventListener('click', async function () {
       const input = $('newSiteInput');

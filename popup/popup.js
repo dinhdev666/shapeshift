@@ -154,6 +154,18 @@ function setSiteState (enabled) {
   if (toggle) toggle.checked = enabled;
 }
 
+function setPersona (config) {
+  const label = $('personaLabel');
+  if (!label) return;
+  // P2 7.4: persona 'auto' keeps the seed-derived OS family. Show the raw
+  // selection so the user knows whether they pinned a platform or left it
+  // derived - the value is already validated against PERSONA_MODES in the
+  // injector.
+  const p = config.persona || 'auto';
+  label.textContent = p === 'auto' ? 'Auto' :
+    (p === 'windows' ? 'Windows' : p === 'mac' ? 'macOS' : p === 'linux' ? 'Linux' : 'Auto');
+}
+
 async function loadStats () {
   const data = await storageGet(['ss_stats', 'ss_rotation_info']);
   const stats = data.ss_stats || {};
@@ -228,6 +240,7 @@ async function main () {
   renderModules(config);
   setSiteState(enabled);
   setHero(enabled, config);
+  setPersona(config);
   await loadStats();
   await loadRotation();
 
@@ -291,6 +304,37 @@ async function main () {
     const btn = $(id);
     if (btn) btn.addEventListener('click', function () { chrome.runtime.openOptionsPage(); });
   });
+
+  // P2 IMP-4: per-origin identity rotation - reset only the active tab's salt
+  // and bfcache generation, so the user can escape a blocked session on one
+  // site without invalidating logins elsewhere. Routes through the service
+  // worker so the salt-change guard and tab-gen stamp are updated atomically.
+  const rotateOrigin = $('rotateOriginBtn');
+  if (rotateOrigin) {
+    rotateOrigin.addEventListener('click', async function () {
+      if (!origin) {
+        toast('This tab has no protectable origin.');
+        return;
+      }
+      rotateOrigin.disabled = true;
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'ROTATE_ORIGIN', origin: origin });
+        if (res && res.success) {
+          toast('Identity reset for ' + host);
+          if (tab && tab.id != null) {
+            try { chrome.tabs.reload(tab.id); } catch (e) { }
+          }
+          setTimeout(function () { window.close(); }, 900);
+        } else {
+          toast('Rotation failed - see diagnostics');
+          rotateOrigin.disabled = false;
+        }
+      } catch (e) {
+        toast('Rotation failed');
+        rotateOrigin.disabled = false;
+      }
+    });
+  }
 }
 
 if (document.readyState === 'loading') {

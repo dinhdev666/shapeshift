@@ -3,7 +3,9 @@
   const installers = (globalThis.ssHookInstallers = globalThis.ssHookInstallers || []);
 
   installers.push(function installWebGLHooks (env) {
-    if (!env || !env.config?.enableWebGLMasking) return;
+    // FEAT-1: check the consistent enable*Protection flag first, fall back to
+    // the legacy enableWebGLMasking flag for backward compatibility.
+    if (!env || !(env.config?.enableWebGlProtection ?? env.config?.enableWebGLMasking)) return;
     const { config, seed } = env;
 
     // P1 2.1: every read must be stable. Two getParameter(VENDOR) calls used to

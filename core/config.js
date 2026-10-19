@@ -64,6 +64,40 @@
       merged[pair[1]] = stored[flatKey];
       out[pair[0]] = merged;
     }
+
+    // FEAT-2: apply profile preset overrides. Each non-balanced profile
+    // defines a sparse override map (only the keys that actually change).
+    // We apply it BEFORE the legacy-flag mapping so that a legacy flag the
+    // user explicitly set (e.g. enableCanvasNoise: false) still wins over
+    // the preset's default for that surface. The check is against `out`, not
+    // `stored`, because `out` has already absorbed migration + flat-to-nested
+    // folds.
+    const PROFILE_PRESETS = schema.presets || {};
+    const profileName = out.profile;
+    if (profileName && PROFILE_PRESETS[profileName] && profileName !== 'balanced') {
+      const preset = PROFILE_PRESETS[profileName];
+      for (const pk in preset) {
+        if (!Object.prototype.hasOwnProperty.call(out, pk)) {
+          out[pk] = preset[pk];
+        }
+      }
+    }
+
+    // FEAT-1: backward-compat mapping from legacy surface flags to the
+    // consistent enable*Protection convention. If the stored config has the
+    // old flag and not the new one, copy the value to the new key so both
+    // worlds (which check the new key) see the same state. This runs AFTER
+    // the preset so a legacy override beats a preset default.
+    const LEGACY_FLAG_MAP = {
+      enableCanvasNoise: 'enableCanvasProtection',
+      enableWebGLMasking: 'enableWebGlProtection',
+      enableAudioNoise: 'enableAudioProtection',
+    };
+    for (const oldKey in LEGACY_FLAG_MAP) {
+      if (Object.prototype.hasOwnProperty.call(out, oldKey) && !Object.prototype.hasOwnProperty.call(out, LEGACY_FLAG_MAP[oldKey])) {
+        out[LEGACY_FLAG_MAP[oldKey]] = out[oldKey];
+      }
+    }
     return out;
   };
 
