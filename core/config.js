@@ -147,6 +147,7 @@
     kdfIterations: [1, 200000],
     rotationIntervalHours: [0.5, 8760],
     timingJitter: [0, 20],
+    saltGuardIntervalMinutes: [1, 1440],
   };
   const CONFIG_BOOLEAN_KEYS = [
     'debug', 'enableCanvasNoise', 'enableWebGLMasking', 'maskWebGLVendorStrings',

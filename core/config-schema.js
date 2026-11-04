@@ -71,6 +71,10 @@
     // WebGPU adapter and the keyboard layout agree by construction.
     persona: 'auto',
     autoRotateFingerprint: false, rotationIntervalHours: 24, rotateOnStartup: false,
+    // BG-4: how often the bfcache salt-integrity guard re-checks tabs. Chrome
+    // clamps packed-extension alarms to a 1-minute floor, so values below 1 are
+    // raised to 1; 1440 (one day) is the upper bound offered by the UI.
+    saltGuardIntervalMinutes: 30,
     // Security §3: rotation used to reload every open tab and raise an OS
     // notification with no way to opt out. Both are now explicit switches so
     // the extension never acts on tabs the user did not ask it to touch.

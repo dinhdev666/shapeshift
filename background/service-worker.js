@@ -128,7 +128,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'UPDATE_ROTATION_CONFIG') {
-    setupRotationAlarm().then(() => {
+    Promise.all([setupRotationAlarm(), setupSaltGuardAlarm()]).then(() => {
       sendResponse({ success: true });
     }).catch(error => {
       console.error('Failed to update rotation config:', error);
@@ -754,9 +754,13 @@ async function reloadStaleTabs() {
 
 async function setupSaltGuardAlarm() {
   await chrome.alarms.clear(SALT_GUARD_ALARM);
-  // 30 minutes is the shortest period Chrome reliably honours for a packed
-  // extension and is far below the shortest rotation interval the UI offers.
-  await chrome.alarms.create(SALT_GUARD_ALARM, { periodInMinutes: 30 });
+  // BG-4: the period used to be hard-coded to 30 minutes. Read it from the
+  // stored config (clamped to [1, 1440]) so the user can tune the bfcache
+  // staleness check, falling back to 30 when no config or an invalid value.
+  const result = await chrome.storage.local.get(['ssConfig']);
+  const config = result.ssConfig || {};
+  const period = Math.min(1440, Math.max(1, Number(config.saltGuardIntervalMinutes) || 30));
+  await chrome.alarms.create(SALT_GUARD_ALARM, { periodInMinutes: period });
 }
 
 // Stamp on every completed load, so a normal navigation refreshes the stamp and

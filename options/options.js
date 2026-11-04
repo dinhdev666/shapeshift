@@ -399,8 +399,14 @@ async function renderSelfTest() {
 
   const report = response.report || {};
   const parts = report.parts || {};
-  const labels = { canvas: 'Canvas', webgl: 'WebGL', audio: 'Audio', navigator: 'Navigator' };
-  ['canvas', 'webgl', 'audio', 'navigator'].forEach(function (key) {
+  const labels = {
+    canvas: 'Canvas', webgl: 'WebGL', audio: 'Audio', navigator: 'Navigator',
+    screen: 'Screen', timezone: 'Timezone', fonts: 'Fonts', webrtc: 'WebRTC',
+    sensors: 'Sensors', touch: 'Touch', useragent: 'User agent', media: 'Media',
+    geolocation: 'Geolocation', detection: 'Detection', webgpu: 'WebGPU',
+    keyboard: 'Keyboard', viewport: 'Viewport'
+  };
+  Object.keys(labels).forEach(function (key) {
     if (parts[key]) host.appendChild(diagnosticRow(labels[key], parts[key]));
   });
   const compositeRow = diagnosticRow('Composite', report.composite || 'unavailable');
