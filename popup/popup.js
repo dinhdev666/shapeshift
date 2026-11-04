@@ -207,7 +207,7 @@ function renderRotation () {
   let label = '-';
   let pct = 0;
   if (status.nextRotation) {
-    const diff = new Date(status.nextRotation).getTime() - Date.now();
+    const diff = Math.max(0, new Date(status.nextRotation).getTime() - Date.now());
     const mins = Math.max(0, Math.round(diff / 60000));
     label = mins < 60 ? mins + ' min' : Math.round(mins / 60) + ' h';
     const intervalMs = (status.intervalHours || 24) * 3600000;

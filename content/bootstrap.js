@@ -139,38 +139,6 @@
       const seed = config.perOriginFingerprint ? deriveSeed(salt, location.origin) : baseSeed;
       const prng = createPRNG(seed);
 
-      // Uniform noise distribution
-      const uniformNoise = (scale = 1) => (prng() - 0.5) * scale;
-
-      // Gaussian/Normal noise distribution (Box-Muller transform)
-      // More natural and harder to detect statistically
-      let spareGaussian = null;
-      const gaussianNoise = (mean = 0, stddev = 1) => {
-        if (spareGaussian !== null) {
-          const value = spareGaussian;
-          spareGaussian = null;
-          return mean + stddev * value;
-        }
-
-        // P1: prng() can legitimately return exactly 0, and Math.log(0) is
-        // -Infinity, which made radius Infinity and poisoned the sample (and the
-        // spare) with NaN/Infinity. Clamp to the smallest positive double so the
-        // transform stays finite; the probability of hitting it is ~2^-32.
-        let u1 = prng();
-        if (!(u1 > 0)) u1 = Number.MIN_VALUE;
-        const u2 = prng();
-        const radius = Math.sqrt(-2 * Math.log(u1));
-        const theta = 2 * Math.PI * u2;
-
-        spareGaussian = radius * Math.sin(theta);
-        return mean + stddev * (radius * Math.cos(theta));
-      };
-
-      // Choose noise function based on config
-      const noise = config.useGaussianNoise
-        ? (scale = 1) => gaussianNoise(0, scale)
-        : uniformNoise;
-
       // Independent PRNG per protected surface (P1 2.26): enabling or disabling
       // one module must not shift the values another module reports. Each hook
       // asks for its own stream keyed on (salt, origin, surfaceId); the shared
@@ -180,6 +148,35 @@
       const prngFor = (surfaceId) => createPRNG(
         deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed
       );
+
+      // Noise gets its own surface stream so canvas/audio reads do not consume
+      // the shared prng (and so enabling one module cannot shift another).
+      const noisePrng = prngFor('noise');
+
+      // Uniform noise distribution
+      const uniformNoise = (scale = 1) => (noisePrng() - 0.5) * scale;
+
+      // Gaussian/Normal noise distribution (Box-Muller transform)
+      let spareGaussian = null;
+      const gaussianNoise = (mean = 0, stddev = 1) => {
+        if (spareGaussian !== null) {
+          const value = spareGaussian;
+          spareGaussian = null;
+          return mean + stddev * value;
+        }
+        let u1 = noisePrng();
+        if (!(u1 > 0)) u1 = Number.MIN_VALUE;
+        const u2 = noisePrng();
+        const radius = Math.sqrt(-2 * Math.log(u1));
+        const theta = 2 * Math.PI * u2;
+        spareGaussian = radius * Math.sin(theta);
+        return mean + stddev * (radius * Math.cos(theta));
+      };
+
+      // Choose noise function based on config
+      const noise = config.useGaussianNoise
+        ? (scale = 1) => gaussianNoise(0, scale)
+        : uniformNoise;
 
       // Initialize timing utilities with an independent surface PRNG so timing
       // jitter no longer consumes the shared noise stream.
