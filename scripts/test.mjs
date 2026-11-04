@@ -288,8 +288,25 @@ assert('MAIN-world canvas noise carries the FNV prefix state',
   injectorSrc.includes('function fnvUpdate(state, value)') &&
   injectorSrc.includes("fnvUpdate(FNV_OFFSET, canvasSeed + ':')") &&
   injectorSrc.includes('fnvUpdate(canvasPrefixState, index)') &&
+  injectorSrc.includes('canvasPixelNoise(index)') &&
+  !injectorSrc.includes('canvasPrefixState = fnvUpdate(canvasPrefixState'),
   !injectorSrc.includes("hashString(canvasSeed + ':' + index)"),
   'the MAIN canvas hook still rebuilds a string per byte');
+// MAIN must report the persona vendor/renderer pair, not the real string
+// with a suffix: the ISOLATED copy returns the ':gpu' persona pair, so a
+// suffixed real string made one identity read two different GPUs.
+assert('MAIN-world webgl strings use the :gpu persona pair',
+  injectorSrc.includes('return isRenderer ? GPU_RENDERER_STRING : GPU_VENDOR_STRING') &&
+  !injectorSrc.includes("':wglstr:'"),
+  'the MAIN webgl string branch diverged from the ISOLATED persona pair');
+// ISOLATED audio noise must key on the MAIN-world prefix, so the two worlds
+// agree sample for sample for one identity.
+const audioSrc = readFileSync(join(ROOT, 'content/hooks_audio.js'), 'utf8');
+assert('ISOLATED audio noise keys on the MAIN-world prefix',
+  audioSrc.includes("seed + ':audio:ch:' + channel + ':'") &&
+  audioSrc.includes("hash(seed + ':audio:ch:") &&
+  !audioSrc.includes("seed + ':a:'"),
+  'ISOLATED audio noise diverged from the MAIN-world key');
 // P1 4.4 (two-world divergence): both timezone copies probe the real zone's
 // offset on two dates to build the DST-consistent candidate set. Those probes
 // used `new Date()` / `Date.now() + 182d`, so the set - and therefore the zone

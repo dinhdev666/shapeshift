@@ -126,7 +126,8 @@
       // directly to avoid N increment() calls on a hot path.
       Object.keys(data.counts).forEach(function (category) {
         if (Object.prototype.hasOwnProperty.call(localStats, category)) {
-          localStats[category] += data.counts[category];
+          const n = Number(data.counts[category]);
+          if (Number.isFinite(n) && n > 0) localStats[category] += n;
         }
       });
       scheduleFlush();
@@ -142,7 +143,8 @@
       if (!counts || typeof counts !== 'object') return;
       Object.keys(counts).forEach(function (category) {
         if (Object.prototype.hasOwnProperty.call(localStats, category)) {
-          localStats[category] += counts[category];
+          const n = Number(counts[category]);
+          if (Number.isFinite(n) && n > 0) localStats[category] += n;
         }
       });
       scheduleFlush();

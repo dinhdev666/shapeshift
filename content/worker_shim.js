@@ -42,10 +42,16 @@
   }
 
   // Expose the builder AND a wrapping entry point that validates before
-  // returning source, so callers cannot accidentally skip the guard.
-  globalThis.ssBuildWorkerShim = function (persona) {
-    var source = buildWorkerShim(persona);
-    validateShim(source);
-    return source;
-  };
+  // returning source, so callers cannot accidentally skip the guard. The
+  // property is defined non-enumerable: an enumerable global leaks the
+  // extension's presence into the worker realm's key list.
+  Object.defineProperty(globalThis, 'ssBuildWorkerShim', {
+    value: function (persona) {
+      var source = buildWorkerShim(persona);
+      validateShim(source);
+      return source;
+    },
+    writable: true,
+    configurable: true
+  });
 })();

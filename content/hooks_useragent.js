@@ -188,7 +188,7 @@
 
     // Hook navigator.appVersion
     safeWrap(() => {
-      const origAppVersion = navigator.appVersion;
+      const _origAppVersion = navigator.appVersion;
       const origUserAgent = navigator.userAgent;
 
       // P1 4.2 (two-world divergence): this used to bump only the patch digit by

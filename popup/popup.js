@@ -55,7 +55,7 @@ function storageSet (items) {
   });
 }
 
-function storageRemove (keys) {
+function _storageRemove (keys) {
   return new Promise(function (resolve) {
     try { chrome.storage.local.remove(keys, function () { resolve(true); }); }
     catch (e) { resolve(false); }
@@ -242,6 +242,10 @@ async function loadRotation () {
 }
 
 async function main () {
+  const bv = document.getElementById('brandVersion');
+  if (bv && chrome && chrome.runtime && chrome.runtime.getManifest) {
+    try { bv.textContent = 'v' + chrome.runtime.getManifest().version; } catch (e) { /* ignore */ }
+  }
   const tab = await activeTab();
   const origin = originOf(tab);
   const host = hostOf(tab);

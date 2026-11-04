@@ -46,10 +46,8 @@
     // produced a different SDP out. Key them on (seed, input) instead, exactly
     // like the media and WebGL surfaces already do.
     const webrtcHash = globalThis.ssHashString;
-    function stableRoll (label, input) {
-      if (!webrtcHash) return 0.5;
-      return webrtcHash(((env.seed >>> 0) || 0) + ':webrtc:' + label + ':' + input) / 4294967296;
-    }
+    // stableRoll is defined in hooks_media.js; this file does not use it.
+    void webrtcHash;
 
     safeWrap(() => {
       if (!window.RTCPeerConnection) return;
@@ -102,7 +100,7 @@
         const origCreateAnswer = pc.createAnswer;
         if (globalThis.ssStealth && !globalThis.ssStealth.isPatched(origCreateAnswer)) {
           globalThis.ssStealth.markPatched(origCreateAnswer);
-          pc.createAnswer = function (options) {
+          pc.createAnswer = function (_options) {
             if (globalThis.ssTimingUtils) {
               globalThis.ssTimingUtils.randomDelaySync();
             }
@@ -295,7 +293,7 @@
             // entry and the `.toJSON()` method disappeared - a one-line
             // oracle. Build the copy on the real prototype instead and
             // only overwrite the fields that must change.
-            const modifiedDevices = devices.map((device, index) => {
+            const modifiedDevices = devices.map((device, _index) => {
               const modified = Object.create(Object.getPrototypeOf(device));
               // P0: `modified.deviceId = value` silently did NOTHING. The real
               // field is a getter-only accessor on MediaDeviceInfo.prototype,

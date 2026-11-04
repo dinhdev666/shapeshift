@@ -303,22 +303,29 @@ async function applyStatistics(data, tabUrl, senderUrl) {
     }
 
     // Update counters
+    // Coerce every incoming counter: a forged or corrupted payload must not
+    // poison the totals with NaN or a string, which would then be re-read as
+    // NaN on every subsequent update.
+    const num = function (v) {
+      const n = Number(v);
+      return Number.isFinite(n) && n > 0 ? n : 0;
+    };
     stats = {
       sitesProtectedArray: sitesArray,
       sitesProtected: sitesProtected.size,
-      totalCanvasReads: (stats.totalCanvasReads || 0) + (data.canvasReads || 0),
-      totalWebGLCalls: (stats.totalWebGLCalls || 0) + (data.webglCalls || 0),
-      totalAudioCalls: (stats.totalAudioCalls || 0) + (data.audioCalls || 0),
-      totalNavigatorReads: (stats.totalNavigatorReads || 0) + (data.navigatorReads || 0),
-      totalWebRTCCalls: (stats.totalWebRTCCalls || 0) + (data.webrtcCalls || 0),
-      totalScreenReads: (stats.totalScreenReads || 0) + (data.screenReads || 0),
-      totalFontReads: (stats.totalFontReads || 0) + (data.fontReads || 0),
-      totalTimezoneReads: (stats.totalTimezoneReads || 0) + (data.timezoneReads || 0),
-      totalSensorReads: (stats.totalSensorReads || 0) + (data.sensorReads || 0),
-      totalMediaCodecReads: (stats.totalMediaCodecReads || 0) + (data.mediaCodecReads || 0),
-      totalDrmReads: (stats.totalDrmReads || 0) + (data.drmReads || 0),
-      totalGeolocationReads: (stats.totalGeolocationReads || 0) + (data.geolocationReads || 0),
-      totalTouchReads: (stats.totalTouchReads || 0) + (data.touchReads || 0),
+      totalCanvasReads: num(stats.totalCanvasReads) + num(data.canvasReads),
+      totalWebGLCalls: num(stats.totalWebGLCalls) + num(data.webglCalls),
+      totalAudioCalls: num(stats.totalAudioCalls) + num(data.audioCalls),
+      totalNavigatorReads: num(stats.totalNavigatorReads) + num(data.navigatorReads),
+      totalWebRTCCalls: num(stats.totalWebRTCCalls) + num(data.webrtcCalls),
+      totalScreenReads: num(stats.totalScreenReads) + num(data.screenReads),
+      totalFontReads: num(stats.totalFontReads) + num(data.fontReads),
+      totalTimezoneReads: num(stats.totalTimezoneReads) + num(data.timezoneReads),
+      totalSensorReads: num(stats.totalSensorReads) + num(data.sensorReads),
+      totalMediaCodecReads: num(stats.totalMediaCodecReads) + num(data.mediaCodecReads),
+      totalDrmReads: num(stats.totalDrmReads) + num(data.drmReads),
+      totalGeolocationReads: num(stats.totalGeolocationReads) + num(data.geolocationReads),
+      totalTouchReads: num(stats.totalTouchReads) + num(data.touchReads),
       lastUpdate: new Date().toISOString(),
       lastReset: stats.lastReset || new Date().toISOString()
     };
@@ -386,25 +393,26 @@ async function checkAndRotateFingerprint() {
   const config = result.ssConfig || {};
   const rotationInfo = result.ss_rotation_info || {};
 
-  if (!config.autoRotateFingerprint) {
-    return; // Auto-rotation disabled
-  }
+  // Global scheduled rotation only. Per-origin rotation is independent and
+  // must still run when global auto-rotation is off, so it is not gated by
+  // this return.
+  if (config.autoRotateFingerprint) {
+    // Same clamp as setupRotationAlarm(): a 0.5 h setting must mean 30 minutes
+    // here too, or the alarm fires while this check still thinks 24 h remain.
+    const intervalHours = Math.max(0.5, Number(config.rotationIntervalHours) || 24);
+    const intervalMs = intervalHours * 60 * 60 * 1000;
+    const lastRotation = rotationInfo.lastRotation ? new Date(rotationInfo.lastRotation) : new Date(0);
+    const now = new Date();
+    const timeSinceRotation = now - lastRotation;
 
-  // Same clamp as setupRotationAlarm(): a 0.5 h setting must mean 30 minutes
-  // here too, or the alarm fires while this check still thinks 24 h remain.
-  const intervalHours = Math.max(0.5, Number(config.rotationIntervalHours) || 24);
-  const intervalMs = intervalHours * 60 * 60 * 1000;
-  const lastRotation = rotationInfo.lastRotation ? new Date(rotationInfo.lastRotation) : new Date(0);
-  const now = new Date();
-  const timeSinceRotation = now - lastRotation;
-
-  if (timeSinceRotation >= intervalMs) {
-    console.log(`[ShapeShift Rotation] Time for scheduled rotation (${intervalHours}h interval)`);
-    await rotateFingerprintNow();
-  } else {
-    const nextRotation = new Date(lastRotation.getTime() + intervalMs);
-    const timeUntil = nextRotation - now;
-    console.log(`[ShapeShift Rotation] Next rotation in ${Math.round(timeUntil / 1000 / 60)} minutes`);
+    if (timeSinceRotation >= intervalMs) {
+      console.log(`[ShapeShift Rotation] Time for scheduled rotation (${intervalHours}h interval)`);
+      await rotateFingerprintNow();
+    } else {
+      const nextRotation = new Date(lastRotation.getTime() + intervalMs);
+      const timeUntil = nextRotation - now;
+      console.log(`[ShapeShift Rotation] Next rotation in ${Math.round(timeUntil / 1000 / 60)} minutes`);
+    }
   }
 
   // FEAT-3: per-origin rotation scheduling. Each origin in ss_site_settings can
@@ -595,6 +603,11 @@ async function rotateOriginSalt(origin) {
 
   await bumpSaltGeneration();
 
+  // Stamp the generation before the bump so the per-tab stamps stay one
+  // behind sync: the bfcache guard reloads a tab when its stamp trails the
+  // current generation, so stamping the new generation here would mark every
+  // tab fresh and the reload would never fire. Re-read the generation and
+  // stamp one behind it - the same invariant as rotateFingerprintNow().
   // Bump the per-tab generation stamp for any tab at this origin so the
   // bfcache guard (service-worker.js salt-change alarm) reloads it on next
   // activation if it is sitting in the back/forward cache.
@@ -604,11 +617,11 @@ async function rotateOriginSalt(origin) {
     .filter(function (t) { return typeof t.id === 'number'; })
     .map(function (t) { return 'ss_tab_gen_' + t.id; });
   if (genKeys.length > 0) {
-    const existing = await chrome.storage.session.get(genKeys);
-    const now = Date.now();
+    const _existing = await chrome.storage.session.get(genKeys);
+    const genRes = await chrome.storage.local.get(['ss_salt_generation']);
+    const gen = typeof genRes.ss_salt_generation === 'number' ? genRes.ss_salt_generation : 0;
     genKeys.forEach(function (k) {
-      tabStamps[k] = (existing[k] || 0) + 1;
-      void now; // generation stamp is monotonically bumped, not time-based
+      tabStamps[k] = Math.max(0, gen - 1);
     });
     await chrome.storage.session.set(tabStamps);
   }

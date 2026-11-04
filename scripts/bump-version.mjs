@@ -8,7 +8,8 @@
 // This script writes both atomically, validates semver on the input, and
 // refuses to proceed if either file is missing or already at the target.
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join, dirname, fileURLToPath } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const SEMVER_RE = /^(\d+)\.(\d+)\.(\d+)$/;

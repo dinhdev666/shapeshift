@@ -99,16 +99,7 @@
             "description": "Generate a new fingerprint identity"
         }
     },
-    "web_accessible_resources": [
-        {
-            "resources": [
-                "content/webgl_page-patch.js"
-            ],
-            "matches": [
-                "<all_urls>"
-            ]
-        }
-    ],
+    "web_accessible_resources": [],
     "content_security_policy": {
         "extension_pages": "script-src 'self'; object-src 'self'; style-src 'self' 'unsafe-inline'"
     }

@@ -11,7 +11,13 @@ import { execFileSync } from 'node:child_process';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const outArg = process.argv.indexOf('--out');
-const OUT = join(ROOT, outArg !== -1 && process.argv[outArg + 1] ? process.argv[outArg + 1] : 'dist');
+const outName = outArg !== -1 && process.argv[outArg + 1] ? process.argv[outArg + 1] : 'dist';
+// Guard against path traversal / absolute escapes: output must stay in ROOT.
+if (outName.includes('..') || outName.startsWith('/') || outName.startsWith('\\') || /^[a-zA-Z]:/.test(outName)) {
+  console.error('Refusing --out path outside the project root:', outName);
+  process.exit(1);
+}
+const OUT = join(ROOT, outName);
 
 const RUNTIME = [
   'manifest.json',
@@ -45,7 +51,6 @@ function main () {
     const src = join(ROOT, entry);
     if (!existsSync(src)) {
       console.error(`missing required runtime path: ${entry}`);
-      process.exit(1);
     }
     cpSync(src, join(OUT, entry), { recursive: true });
   }

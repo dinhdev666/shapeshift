@@ -15,19 +15,19 @@
     // itself the detection signal.
     //
     // P1 (hot loop): this built a fresh string and re-hashed the whole
-    // "seed:a:channel:" prefix for every sample - a 16k-sample buffer meant 16k
+    // "seed:audio:ch:channel:" prefix for every sample - a 16k-sample buffer meant 16k
     // concatenations and ~16k * 20 character folds per read. FNV-1a is a pure
     // sequential fold, so the state after the constant prefix is computed once
-    // per channel and only the index digits are folded per sample. The result
-    // is byte-identical to the old formula, which keeps existing identities
-    // stable across the upgrade.
+    // per channel and only the index digits are folded per sample. The key is
+    // the MAIN-world key (seed:audio:ch:<ch>:), so the ISOLATED copy and the
+    // page-visible MAIN copy produce identical samples for one identity.
     const prefixCache = Object.create(null);
     function channelPrefix (channel) {
       let st = prefixCache[channel];
       if (st === undefined) {
         const init = globalThis.ssFnvInit;
         const upd = globalThis.ssFnvUpdate;
-        st = (init && upd) ? upd(init(), seed + ':a:' + channel + ':') : null;
+        st = (init && upd) ? upd(init(), seed + ':audio:ch:' + channel + ':') : null;
         prefixCache[channel] = st;
       }
       return st;
@@ -39,26 +39,21 @@
       if (prefix === null) {
         const hash = globalThis.ssHashString;
         if (!hash) return noise(strength);
-        return (((hash(seed + ':a:' + channel + ':' + index)) / 4294967296) - 0.5) * strength;
+        return (((hash(seed + ':audio:ch:' + channel + ':' + index)) / 4294967296) - 0.5) * strength;
       }
       // P0: the channel argument was ignored, so getChannelData(0) and
       // getChannelData(1) shared one noise stream. Key on (seed, channel,
       // index) so each channel stays deterministic and distinct, matching
-      // the MAIN world formula.
+      // the MAIN world formula (seed:audio:ch:<ch>:<i>).
       const h = upd(prefix, index);
       return ((h / 4294967296) - 0.5) * strength;
     }
 
     // Report an audio-hook installation failure so it is visible instead of
-    // silent. Diagnostics go to the console when debug is on; the stats tracker
-    // is not used here because the hook never installed, so there are no calls
-    // to count.
+    // silent. Diagnostics go to the console when debug is on.
     function reportAudioError (e) {
       if (globalThis.ssConfig && globalThis.ssConfig.debug) {
         try { console.error('[shapeshift][audio] failed to patch getChannelData:', e && e.message ? e.message : String(e)); } catch (_) { }
-      }
-      if (globalThis.ssStatsTracker) {
-        try { globalThis.ssStatsTracker.increment('audioInstallErrors'); } catch (_) { }
       }
     }
 
@@ -66,8 +61,7 @@
       const AudioBufferProto = window.AudioBuffer && window.AudioBuffer.prototype;
       if (!AudioBufferProto || !AudioBufferProto.getChannelData) return;
 
-      // Guard against a second wrap (double-patch). Enumerable-safe: the
-      // prototype accessor stays non-configurable shadow of the native.
+      // Guard against a second wrap (double-patch).
       if (globalThis.ssStealth && globalThis.ssStealth.isPatched(AudioBufferProto)) return;
       if (globalThis.ssStealth) globalThis.ssStealth.markPatched(AudioBufferProto);
 

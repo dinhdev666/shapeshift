@@ -65,7 +65,6 @@ if (manifest) {
     csp.includes('script-src') ? ok('CSP pins script-src') : fail('CSP pins script-src', csp);
     /script-src[^;]*'self'/.test(csp) ? ok('CSP scopes script-src to self') : fail('CSP scopes script-src to self', csp);
     // 'unsafe-inline' is legitimate in style-src, but never in script-src.
-    const scriptSrc = (csp.match(/script-src[^;]*/) || [''])[0];
     !/script-src[^;]*'unsafe-inline'/.test(csp) ? ok('CSP bans unsafe-inline in script-src') : fail('CSP bans unsafe-inline in script-src', csp);
   } else {
     fail('CSP present in manifest', 'content_security_policy.extension_pages missing');
@@ -144,7 +143,7 @@ section('localization');
 // A manifest that uses __MSG_*__ without a matching catalog loads as a broken
 // extension, and Chrome silently falls back to the raw placeholder string.
 // LOCALE_MSG above is block-scoped to the manifest check, so declare it here too.
-const LOCALE_PLACEHOLDER = /^__MSG_[A-Za-z0-9_]+__$/;
+const _LOCALE_PLACEHOLDER = /^__MSG_[A-Za-z0-9_]+__$/;
 if (manifest && manifest.default_locale) {
   const messagesPath = join(ROOT, '_locales', manifest.default_locale, 'messages.json');
   if (!existsSync(messagesPath)) {
@@ -161,7 +160,6 @@ if (manifest && manifest.default_locale) {
       // tooltip, which every other check happily passed. Collect every
       // placeholder from the manifest, the popup/options markup and their
       // controllers instead of enumerating three fields by hand.
-      const LOCALE_MSG = /^__MSG_[A-Za-z0-9_]+__$/;
       const PLACEHOLDER_G = /__MSG_([A-Za-z0-9_]+)__/g;
       const placeholderSources = [text(manifestPath)];
       ['popup', 'options'].forEach((dir) => {
@@ -901,7 +899,7 @@ if (SKIP_DIST) {
   ['images'].forEach((dir) => {
     const abs = join(ROOT, dir);
     if (!existsSync(abs)) return;
-    const distAbs = join(ROOT, 'dist', dir);
+    const _distAbs = join(ROOT, 'dist', dir);
     readdirSync(abs).forEach((entry) => {
       if (!statSync(join(abs, entry)).isFile()) return;
       if (extname(entry) !== '.png') return;

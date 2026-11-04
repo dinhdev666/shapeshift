@@ -156,10 +156,18 @@ function controlRow(item, config) {
     input.value = value;
     input.dataset.key = item.key;
     input.dataset.kind = 'number';
+    const formatValue = function (v) {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return String(v);
+      const step = Number(item.range[2]);
+      if (step >= 1) return String(Math.round(n));
+      const decimals = Math.max(0, Math.ceil(-Math.log10(step)));
+      return n.toFixed(decimals);
+    };
     const chip = document.createElement('span');
     chip.className = 'value-chip';
-    chip.textContent = Number(value).toFixed(1);
-    input.addEventListener('input', function () { chip.textContent = Number(input.value).toFixed(1); });
+    chip.textContent = formatValue(value);
+    input.addEventListener('input', function () { chip.textContent = formatValue(input.value); });
     control.appendChild(input);
     control.appendChild(chip);
   } else if (item.select) {
@@ -247,6 +255,9 @@ function collect() {
 const MODULE_KEYS = [
   'enableCanvasNoise',
   'enableWebGLMasking',
+  'enableWebGPUProtection',
+  'enableKeyboardProtection',
+  'enableVisualViewportProtection',
   'enableAudioNoise',
   'enableWebRTCProtection',
   'enableScreenProtection',
@@ -927,19 +938,26 @@ async function main() {
       const rotHours = $('overrideRotationHours').value;
       const personaVal = $('overridePersona').value;
       const noiseLevel = $('overrideNoiseLevel').value;
-      if (rotHours) entry.rotationHours = Number(rotHours);
-      else delete entry.rotationHours;
+      if (rotHours) {
+        const n = clampNumber('rotationIntervalHours', rotHours);
+        if (!Number.isFinite(n)) { toast('Rotation hours out of range'); return; }
+        entry.rotationHours = n;
+      } else delete entry.rotationHours;
       if (personaVal) entry.persona = personaVal;
       else delete entry.persona;
       if (noiseLevel) {
+        const n = clampNumber('noiseLevel', noiseLevel);
+        if (!Number.isFinite(n)) { toast('Noise level out of range'); return; }
         entry.noiseOverrides = entry.noiseOverrides || {};
         entry.noiseOverrides.geolocation = entry.noiseOverrides.geolocation || {};
-        entry.noiseOverrides.geolocation.noiseLevel = Number(noiseLevel);
+        entry.noiseOverrides.geolocation.noiseLevel = n;
       } else if (entry.noiseOverrides) {
         delete entry.noiseOverrides.geolocation;
         if (Object.keys(entry.noiseOverrides).length === 0) delete entry.noiseOverrides;
       }
-      entry.enabled = true;
+      // Preserve the user's paused state instead of silently un-pausing.
+      if (store[origin] && typeof store[origin].enabled === 'boolean') entry.enabled = store[origin].enabled;
+      else entry.enabled = true;
       store[origin] = entry;
       await set({ ss_site_settings: store });
       input.value = '';

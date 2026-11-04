@@ -4,8 +4,9 @@
 // manifest.json, _locales/, images/) for changes and rebuilds dist/ on
 // debounce. Run `pnpm run dev` during development to avoid manually
 // reloading the extension on every edit.
-import { watch, existsSync, readdirSync, statSync } from 'node:fs';
-import { join, dirname, fileURLToPath } from 'node:path';
+import { watch, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));

@@ -171,11 +171,6 @@
         ? (scale = 1) => gaussianNoise(0, scale)
         : uniformNoise;
 
-      // Initialize timing utilities with PRNG for timing attack resistance
-      if (globalThis.ssTimingUtils) {
-        globalThis.ssTimingUtils.init(prng);
-      }
-
       // Independent PRNG per protected surface (P1 2.26): enabling or disabling
       // one module must not shift the values another module reports. Each hook
       // asks for its own stream keyed on (salt, origin, surfaceId); the shared
@@ -185,6 +180,12 @@
       const prngFor = (surfaceId) => createPRNG(
         deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed
       );
+
+      // Initialize timing utilities with an independent surface PRNG so timing
+      // jitter no longer consumes the shared noise stream.
+      if (globalThis.ssTimingUtils) {
+        globalThis.ssTimingUtils.init(prngFor('timing'));
+      }
 
       const env = { salt, seed, prng, prngFor, noise, gaussianNoise, uniformNoise, config };
 

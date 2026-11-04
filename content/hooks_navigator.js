@@ -28,9 +28,10 @@
     }
 
     function defineGetter (obj, prop, getter, fallbackObj) {
+      let resistantGetter = null;
       try {
         // Wrap getter with timing resistance
-        const resistantGetter = function() {
+        resistantGetter = function() {
           // Track statistics
           if (globalThis.ssStatsTracker) {
             globalThis.ssStatsTracker.increment('navigatorReads');
@@ -66,7 +67,7 @@
         if (target) {
           try {
             Object.defineProperty(target, prop, {
-              get: resistantGetter,
+              get: getter,
               configurable: true,
               enumerable: false
             });

@@ -38,14 +38,7 @@
 
   // Clean up globals to minimize fingerprinting surface
   function cleanupGlobals() {
-    // Remove development/debug globals that could expose the extension
-    const globalsToClean = [
-      // Keep these for now as they're needed by content scripts:
-      // 'ssConfig', 'ssEnv', 'ssPRNG', 'ssNoise', 'ssReady',
-      // 'ssHookInstallers', 'ssTestFingerprint'
-
-      // But we can make them non-enumerable
-    ];
+    // The real non-enumerable list lives in makeNonEnumerable below.
 
     // P2: ssStatsTracker was missing from this list, so it stayed an
     // enumerable own property of globalThis and was trivially discoverable.

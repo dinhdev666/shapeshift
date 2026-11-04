@@ -46,6 +46,9 @@
       return ((h / 4294967296) - 0.5) * noiseStrength;
     }
 
+    // (JS merged) Keep same canvasPrefixState pattern in MAIN: prefix folded
+    // once, per-byte fold from constant state — two reads stable, both worlds equal.
+
     function safeWrap (fn) {
       try {
         fn();
@@ -150,7 +153,7 @@
             }
             return imgData;
           };
-          log('[shapeshift][canvas] OffscreenCanvasRenderingContext2D.getImageData hooked');
+          console.log('[shapeshift][canvas] OffscreenCanvasRenderingContext2D.getImageData hooked');
         }
       }
 

@@ -286,25 +286,27 @@
         // hooks so both worlds apply the same magnitude.
         const noiseStrength = config.canvasNoiseStrength ?? 2;
         const canvasSeed = String(seed);
-        let canvasPrefixState = fnvUpdate(FNV_OFFSET, canvasSeed + ':');
+        // Deterministic per-pixel noise keyed on (seed, byte index), matching
+        // the ISOLATED hooks_canvas.js byte for byte. The FNV state after the
+        // constant "<seed>:" prefix is folded once per install; every byte
+        // folds only its index digits from that state, so two reads of the
+        // same canvas return identical pixels - a page reading twice must
+        // see the same values, not a drifting stream.
+        const canvasPrefixState = fnvUpdate(FNV_OFFSET, canvasSeed + ':');
+        function canvasPixelNoise(index) {
+          return ((fnvUpdate(canvasPrefixState, index) / 4294967296) - 0.5) * noiseStrength;
+        }
         const origGetImageData = CanvasRenderingContext2D.prototype.getImageData;
         const origToDataURL = HTMLCanvasElement.prototype.toDataURL;
         const origToBlob = HTMLCanvasElement.prototype.toBlob;
 
-        // Streaming noise: every pixel draws from ssPagePrng(), so two reads of
-        // the same canvas return different pixels. The stream is deterministic
-        // for a given seed, so the same (salt, origin) always produces the same
-        // noise sequence - stable per identity, non-static across reads.
         function noisedImageData(ctx, x, y, w, h) {
           const imgData = origGetImageData.call(ctx, x, y, w, h);
           const data = imgData.data;
           for (let index = 0; index < data.length; index += 4) {
-            canvasPrefixState = fnvUpdate(canvasPrefixState, index);
-            data[index] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-            canvasPrefixState = fnvUpdate(canvasPrefixState, index + 1);
-            data[index + 1] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-            canvasPrefixState = fnvUpdate(canvasPrefixState, index + 2);
-            data[index + 2] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
+            data[index] += canvasPixelNoise(index);
+            data[index + 1] += canvasPixelNoise(index + 1);
+            data[index + 2] += canvasPixelNoise(index + 2);
           }
           return imgData;
         }
@@ -324,12 +326,9 @@
           const copy = ctx.createImageData(original.width, original.height);
           copy.data.set(original.data);
           for (let index = 0; index < copy.data.length; index += 4) {
-            canvasPrefixState = fnvUpdate(canvasPrefixState, index);
-            copy.data[index] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-            canvasPrefixState = fnvUpdate(canvasPrefixState, index + 1);
-            copy.data[index + 1] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-            canvasPrefixState = fnvUpdate(canvasPrefixState, index + 2);
-            copy.data[index + 2] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
+            copy.data[index] += canvasPixelNoise(index);
+            copy.data[index + 1] += canvasPixelNoise(index + 1);
+            copy.data[index + 2] += canvasPixelNoise(index + 2);
           }
           return { original: original, noised: copy };
         }
@@ -415,12 +414,9 @@
             const imgData = origOffscreenGetImageData.call(this, x, y, w, h);
             const data = imgData.data;
             for (let index = 0; index < data.length; index += 4) {
-              canvasPrefixState = fnvUpdate(canvasPrefixState, index);
-              data[index] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-              canvasPrefixState = fnvUpdate(canvasPrefixState, index + 1);
-              data[index + 1] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-              canvasPrefixState = fnvUpdate(canvasPrefixState, index + 2);
-              data[index + 2] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
+              data[index] += canvasPixelNoise(index);
+              data[index + 1] += canvasPixelNoise(index + 1);
+              data[index + 2] += canvasPixelNoise(index + 2);
             }
             return imgData;
           };
@@ -447,12 +443,9 @@
                     const id = origOffscreenGetImageData.call(octx, 0, 0, bw, bh);
                     const data = id.data;
                     for (let index = 0; index < data.length; index += 4) {
-                      canvasPrefixState = fnvUpdate(canvasPrefixState, index);
-                      data[index] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-                      canvasPrefixState = fnvUpdate(canvasPrefixState, index + 1);
-                      data[index + 1] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
-                      canvasPrefixState = fnvUpdate(canvasPrefixState, index + 2);
-                      data[index + 2] += ((canvasPrefixState / 4294967296) - 0.5) * noiseStrength;
+                      data[index] += canvasPixelNoise(index);
+                      data[index + 1] += canvasPixelNoise(index + 1);
+                      data[index + 2] += canvasPixelNoise(index + 2);
                     }
                     octx.putImageData(id, 0, 0);
                     return octx.transferToImageBitmap();
@@ -864,6 +857,11 @@
         // Per-context cache so repeated getParameter calls on the same context
         // agree (stability), while the PRNG stream still varies per identity.
         const webglValueCache = new WeakMap();
+        // Prototypes whose readPixels is already patched. A WeakSet keeps
+        // the guard off the prototype itself: an own enumerable property
+        // like `__ss_readPixels` is page-visible state the extension should
+        // never leave behind.
+        const readPixelsPatchedProtos = new WeakSet();
 
         function webglJitterNumber(p, value) {
           // P0: integer-valued queries must stay integer, and the eight
@@ -885,22 +883,13 @@
           return out;
         }
 
-        function webglJitterString(p, value) {
-          let cache = webglValueCache.get(this);
-          if (!cache) {
-            cache = new Map();
-            webglValueCache.set(this, cache);
-          }
-          if (cache.has(p)) return cache.get(p);
-          // Keep the real GPU string as the base so VENDOR / RENDERER /
-          // UNMASKED_* stay coherent with the actual GPU, then append a
-          // seed-derived suffix so the value varies per identity instead of
-          // being a completely fake static persona string.
-          const suffixHash = hashString(seed + ':wglstr:' + p + ':' + value);
-          const suffix = String.fromCharCode(65 + Math.floor((suffixHash / 4294967296) * 26));
-          const out = value + ' (' + suffix + ')';
-          cache.set(p, out);
-          return out;
+        function webglJitterString(p) {
+          // Report the same persona pair as the ISOLATED world and WebGPU,
+          // derived from the shared ':gpu' key. The previous "real string +
+          // (X)" suffix leaked the actual GPU, so one identity reported two
+          // different renderers depending on which world was read.
+          const isRenderer = (this && p === this.RENDERER) || p === 0x9246;
+          return isRenderer ? GPU_RENDERER_STRING : GPU_VENDOR_STRING;
         }
 
         function patchWebGL(proto) {
@@ -944,9 +933,9 @@
           // hardware fingerprint that getParameter never reveals. Add a seed-keyed
           // ±1 byte perturbation (scaled down for float formats) so the value is
           // stable across reads on the same origin but varies per identity.
-          if (proto.readPixels && !proto.__ss_readPixels) {
+          if (proto.readPixels && !readPixelsPatchedProtos.has(proto)) {
+            readPixelsPatchedProtos.add(proto);
             const origReadPixels = proto.readPixels;
-            proto.__ss_readPixels = origReadPixels;
             // Streaming noise: every byte draws from a hash-keyed noise, so two
             // readPixels calls on the same buffer return different bytes. The
             // noise is deterministic for a given seed, so the same (salt,
@@ -1352,7 +1341,7 @@
         const webrtcMode = effectiveWebrtcMode(config.webrtc);
         const blockIPLeak = webrtcMode !== 'off';
         const forceRelay = webrtcMode === 'relay-only';
-        const webrtcSeed = seed >>> 0;
+        // WebRTC uses seed-based hashes elsewhere; no dedicated seed var needed here.
 
         if (window.RTCPeerConnection) {
           const OrigRTCPeerConnection = window.RTCPeerConnection;
