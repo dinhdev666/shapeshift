@@ -141,16 +141,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // specific origin so the page-visible fingerprint changes on the next load
   // while every other site keeps its existing identity.
   if (message.type === 'ROTATE_ORIGIN') {
-    rotateOriginSalt(message.origin).then(async () => {
+    const origin = typeof message.origin === 'string' ? message.origin.trim() : '';
+    let parsedOrigin = '';
+    try { parsedOrigin = origin ? new URL(origin).origin : ''; } catch (e) { parsedOrigin = ''; }
+    if (!parsedOrigin) {
+      sendResponse({ success: false, error: 'invalid origin' });
+      return true;
+    }
+    rotateOriginSalt(parsedOrigin).then(async () => {
       // Record the rotation time on the site settings entry so the next
       // scheduled per-origin check measures from now, not from a stale
       // timestamp (P0-2).
       try {
         const siteResult = await chrome.storage.local.get(['ss_site_settings']);
         const siteSettings = siteResult.ss_site_settings || {};
-        const entry = siteSettings[message.origin] || {};
+        const entry = siteSettings[parsedOrigin] || {};
         const updated = Object.assign({}, entry, { lastRotation: new Date().toISOString() });
-        await chrome.storage.local.set({ ss_site_settings: Object.assign({}, siteSettings, { [message.origin]: updated }) });
+        await chrome.storage.local.set({ ss_site_settings: Object.assign({}, siteSettings, { [parsedOrigin]: updated }) });
       } catch (e) {
         console.error('Failed to record origin rotation time:', e);
       }
