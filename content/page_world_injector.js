@@ -2769,6 +2769,13 @@
     }
 
     log('[shapeshift][page] All hooks installed successfully');
+    // Readiness signal for consumers (e2e tests) that must not sample a protected surface until every MAIN-world hook is installed. Kept non-enumerable so it does not surface in Object.keys(window).
+    try {
+      Object.defineProperty(window, '__ssHooksReady', {
+        value: true, writable: false, enumerable: false, configurable: true
+      });
+      window.dispatchEvent(new CustomEvent('ss:hooks-ready'));
+    } catch (e) { /* ignore */ }
   }); // NOTE: deliberately NOT `{ once: true }`. The ISOLATED bootstrap posts
       // SS_INIT_PAGE_HOOKS after this listener is registered, so a once-listener
       // would consume that first message and every MAIN-world hook would stay

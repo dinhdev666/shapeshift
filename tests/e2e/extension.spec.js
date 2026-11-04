@@ -19,6 +19,12 @@ async function openOrigin(page, origin) {
     })
   );
   await page.goto(`${origin}/index.html`);
+  // ShapeShift installs its MAIN-world hooks asynchronously (salt + KDF).
+  // Sampling before they are ready reads the un-hooked canvas and makes the
+  // determinism assertions flaky, so wait for the readiness signal first.
+  await page.waitForFunction(() => window.__ssHooksReady === true, {
+    timeout: 15000,
+  });
 }
 
 async function canvasFingerprint(page) {
@@ -50,8 +56,14 @@ test.describe('ShapeShift extension behavior', () => {
     page,
   }) => {
     await openOrigin(page, 'https://stable.test');
+    await page.waitForFunction(() => window.__ssHooksReady === true, {
+      timeout: 10000,
+    });
     const first = await canvasFingerprint(page);
     await page.reload();
+    await page.waitForFunction(() => window.__ssHooksReady === true, {
+      timeout: 10000,
+    });
     const second = await canvasFingerprint(page);
     // Same origin + same salt + same generation = same data URL.
     expect(first).toBe(second);
