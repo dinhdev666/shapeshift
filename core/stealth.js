@@ -57,7 +57,7 @@
       'ssConfig', 'ssLoadConfig', 'ssValidateConfig', 'ssMigrateConfig', 'ssNormalizeConfig', 'ssFlattenConfig',
       'ssGetSalt', 'ssConfigSchema', 'ssDefaultConfig', 'ssFlatDefaults',
       'ssFlatToNested', 'ssDeriveSeed', 'ssDeriveSeedSimple',
-      'ssDeriveStrongSeed', 'ssDeriveSurfaceSeed', 'ssHashString', 'ssMixString',
+      'ssDeriveStrongSeed', 'ssDeriveSurfaceSeed', 'ssDeriveStrongSeedAsync', 'ssDeriveSurfaceSeedAsync', 'ssHashString', 'ssMixString',
       'ssClampIterations', 'ssFnvInit', 'ssFnvUpdate', 'ssCreatePRNG',
       'ssCreateMulberry32', 'ssPRNG', 'ssNoise', 'ssEnv', 'ssReady',
       'ssHookInstallers', 'ssTestFingerprint', 'ssTestFingerprintReport', 'ssTimingUtils', 'ssStatsTracker',

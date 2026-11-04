@@ -315,7 +315,7 @@ async function applyStatistics(data, tabUrl, senderUrl) {
     // NaN on every subsequent update.
     const num = function (v) {
       const n = Number(v);
-      return Number.isFinite(n) && n > 0 ? n : 0;
+      return Number.isFinite(n) ? n : 0;
     };
     stats = {
       sitesProtectedArray: sitesArray,
@@ -624,7 +624,11 @@ async function rotateOriginSalt(origin) {
   // Bump the per-tab generation stamp for any tab at this origin so the
   // bfcache guard (service-worker.js salt-change alarm) reloads it on next
   // activation if it is sitting in the back/forward cache.
-  const tabs = await chrome.tabs.query({ url: origin + '/*' });
+  // tabs.query url pattern may not match origin root; query all tabs and filter.
+  const allTabs = await chrome.tabs.query({});
+  const tabs = allTabs.filter(function (t) {
+    try { return t.url && new URL(t.url).origin === origin; } catch (e) { return false; }
+  });
   const tabStamps = {};
   const genKeys = tabs
     .filter(function (t) { return typeof t.id === 'number'; })

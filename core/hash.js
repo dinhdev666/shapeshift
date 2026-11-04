@@ -161,6 +161,32 @@
   function getSeedEpoch () { return seedEpoch; }
   function bumpSeedEpoch () { seedEpoch += 1; return seedEpoch; }
 
+  // Optional async KDF using Web Crypto PBKDF2 when available (ISOLATED world).
+  // Falls back to the synchronous FNV-based KDF when crypto.subtle is missing.
+  async function deriveStrongSeedAsync(baseSalt, origin, iterations = 1000) {
+    const iters = clampIterations(iterations, 1000);
+    if (typeof crypto !== 'undefined' && crypto && crypto.subtle && typeof crypto.subtle.importKey === 'function') {
+      try {
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(String(baseSalt) + '|' + (origin || '')), { name: 'PBKDF2' }, false, ['deriveBits']);
+        const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode('ss.kdf.v2'), iterations: iters, hash: 'SHA-256' }, keyMaterial, 32);
+        const view = new DataView(bits);
+        return view.getUint32(0, false) >>> 0;
+      } catch (e) {
+        // fall through to sync
+      }
+    }
+    return deriveStrongSeed(baseSalt, origin, iters);
+  }
+
+  async function deriveSurfaceSeedAsync(baseSalt, origin, surfaceId, iterations = 64) {
+    const mixed = mixString('ss.surface.v2', baseSalt, origin || '', surfaceId);
+    return deriveStrongSeedAsync(mixed, '', clampIterations(iterations, 64));
+  }
+
+  globalThis.ssDeriveStrongSeedAsync = deriveStrongSeedAsync;
+  globalThis.ssDeriveSurfaceSeedAsync = deriveSurfaceSeedAsync;
+
   globalThis.ssSeedEpoch = getSeedEpoch;
   globalThis.ssBumpSeedEpoch = bumpSeedEpoch;
   globalThis.ssHashString = hashString;

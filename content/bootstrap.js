@@ -136,7 +136,16 @@
       // not invalidate the identity every other site already has a session for.
       const salt = await getSalt(config.perOriginFingerprint ? location.origin : '');
       const baseSeed = hashString(String(salt));
-      const seed = config.perOriginFingerprint ? deriveSeed(salt, location.origin) : baseSeed;
+      let seed;
+      if (config.perOriginFingerprint) {
+        if (config.useStrongKDF !== false && typeof globalThis.ssDeriveStrongSeedAsync === 'function') {
+          seed = await globalThis.ssDeriveStrongSeedAsync(salt, location.origin, (globalThis.ssClampIterations ? globalThis.ssClampIterations(config.kdfIterations, 1000) : 1000));
+        } else {
+          seed = deriveSeed(salt, location.origin);
+        }
+      } else {
+        seed = baseSeed;
+      }
       const prng = createPRNG(seed);
 
       // Independent PRNG per protected surface (P1 2.26): enabling or disabling
@@ -144,10 +153,17 @@
       // asks for its own stream keyed on (salt, origin, surfaceId); the shared
       // `prng` stays for timing jitter and as a fallback.
       const deriveSurfaceSeed = globalThis.ssDeriveSurfaceSeed;
+      const deriveSurfaceSeedAsync = globalThis.ssDeriveSurfaceSeedAsync;
       const surfaceOrigin = config.perOriginFingerprint ? location.origin : '';
-      const prngFor = (surfaceId) => createPRNG(
-        deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed
-      );
+      const surfaceSeedFor = (surfaceId) => {
+        // sync fast path when async not available
+        if (!(config.useStrongKDF !== false && deriveSurfaceSeedAsync)) {
+          return deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed;
+        }
+        // async not awaited here; prngFor is sync. Fall back to sync surface seed.
+        return deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed;
+      };
+      const prngFor = (surfaceId) => createPRNG(surfaceSeedFor(surfaceId));
 
       // Noise gets its own surface stream so canvas/audio reads do not consume
       // the shared prng (and so enabling one module cannot shift another).
