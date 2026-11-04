@@ -94,7 +94,7 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2400);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 4000);
 }
 
 function isControl(item) { return !!(item.range || item.select || item.number); }
@@ -121,6 +121,7 @@ function switchRow(item, config) {
   const input = document.createElement('input');
   input.type = 'checkbox';
   input.dataset.key = item.key;
+  input.setAttribute('aria-label', item.name);
   // P1: an absent key used to render as ON (`!== false`), so every
   // default-false switch (debug, forceRelay, autoRotateFingerprint,
   // rotateOnStartup) appeared enabled on a fresh install even though the
@@ -156,6 +157,7 @@ function controlRow(item, config) {
     input.value = value;
     input.dataset.key = item.key;
     input.dataset.kind = 'number';
+    input.setAttribute('aria-label', item.name);
     const formatValue = function (v) {
       const n = Number(v);
       if (!Number.isFinite(n)) return String(v);
@@ -357,8 +359,13 @@ async function renderSelfTest() {
   let tabs = [];
   try {
     tabs = await new Promise(function (resolve) {
-      chrome.tabs.query({}, function (list) { resolve(list || []); });
+      chrome.tabs.query({ active: true, currentWindow: true }, function (list) { resolve(list || []); });
     });
+    if (!tabs.length) {
+      tabs = await new Promise(function (resolve) {
+        chrome.tabs.query({}, function (list) { resolve(list || []); });
+      });
+    }
   } catch (e) { /* tabs permission unavailable */ }
 
   // The options page itself is chrome-extension://, so it never qualifies.
@@ -473,12 +480,16 @@ const SITE_NOISE_LEVEL = [0, 1];
 function sanitizeSiteSettings(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out = {};
+  let count = 0;
+  const MAX_ENTRIES = 1000;
   for (const origin in raw) {
+    if (count >= MAX_ENTRIES) break;
+    if (typeof origin !== 'string' || !/^https?:\/\/[^\/]+$/i.test(origin)) continue;
     const entry = raw[origin];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
     const cleaned = {};
     if (typeof entry.enabled === 'boolean') cleaned.enabled = entry.enabled;
-    if (typeof entry.reason === 'string') cleaned.reason = entry.reason;
+    if (typeof entry.reason === 'string') cleaned.reason = entry.reason.slice(0, 200);
     if (typeof entry.rotationHours === 'number' && Number.isFinite(entry.rotationHours)) {
       cleaned.rotationHours = Math.min(SITE_ROTATION_HOURS[1], Math.max(SITE_ROTATION_HOURS[0], entry.rotationHours));
     }
@@ -496,6 +507,7 @@ function sanitizeSiteSettings(raw) {
       if (Object.keys(geo).length > 0) cleaned.noiseOverrides = { geolocation: geo };
     }
     out[origin] = cleaned;
+    count++;
   }
   return out;
 }
@@ -530,9 +542,14 @@ async function importConfigFromFile(file) {
   }
   // Restore per-origin site settings when present in the payload, sanitized so
   // a forged or hand-edited import cannot push rotationHours/persona/noise past
-  // the schema bounds or inject unknown keys.
+  // the schema bounds or inject unknown keys. Merge with existing settings
+  // (rather than replacing) so pauses/overrides not present in the file are
+  // preserved.
   if (parsed && typeof parsed === 'object' && parsed.siteSettings && !Array.isArray(parsed.siteSettings)) {
-    await set({ ss_site_settings: sanitizeSiteSettings(parsed.siteSettings) });
+    const existing = (await get(['ss_site_settings'])).ss_site_settings || {};
+    const imported = sanitizeSiteSettings(parsed.siteSettings);
+    const merged = Object.assign({}, existing, imported);
+    await set({ ss_site_settings: merged });
   }
 }
 
@@ -600,24 +617,48 @@ async function renderSites() {
     return;
   }
   origins.forEach(function (origin) {
+    const entry = store[origin] || {};
+    const paused = entry.enabled === false;
     const item = document.createElement('div');
     item.className = 'site-item';
     const text = document.createElement('div');
     const strong = document.createElement('strong');
     strong.textContent = origin;
     const span = document.createElement('span');
-    span.textContent = 'Protection paused';
+    if (paused) span.textContent = 'Protection paused';
+    else if (entry.rotationHours != null || (entry.persona && entry.persona !== 'auto') || (entry.noiseOverrides && Object.keys(entry.noiseOverrides).length > 0)) span.textContent = 'Protection on (overrides active)';
+    else span.textContent = 'Protection on';
     text.appendChild(strong);
     text.appendChild(span);
     const btn = document.createElement('button');
     btn.className = 'btn ghost';
     btn.type = 'button';
-    btn.textContent = 'Resume';
+    btn.textContent = paused ? 'Resume' : 'Pause';
     btn.addEventListener('click', async function () {
       const current = (await get(['ss_site_settings'])).ss_site_settings || {};
-      delete current[origin];
-      await set({ ss_site_settings: current });
-      toast('Protection resumed on ' + origin);
+      if (!current[origin]) current[origin] = {};
+      if (paused) {
+        current[origin].enabled = true;
+        // Drop the entry entirely when no overrides remain, so the default
+        // (protection on) is represented by absence.
+        const keys = Object.keys(current[origin]);
+        if (keys.length === 1 && keys[0] === 'enabled' && current[origin].enabled !== false) {
+          delete current[origin];
+        }
+        await set({ ss_site_settings: current });
+        toast('Protection resumed on ' + origin);
+        // Reload affected tabs so the resumed identity takes effect.
+        try {
+          const tabs = await new Promise(function (resolve) {
+            chrome.tabs.query({ url: origin + '/*' }, function (list) { resolve(list || []); });
+          });
+          for (const t of tabs) if (t && t.id != null) chrome.tabs.reload(t.id);
+        } catch (e) { /* best effort */ }
+      } else {
+        current[origin] = Object.assign({}, current[origin], { enabled: false });
+        await set({ ss_site_settings: current });
+        toast('Protection paused on ' + origin);
+      }
       renderSites();
       refreshStats();
     });
@@ -711,7 +752,8 @@ async function renderOverrides() {
 
 async function main() {
   const stored = (await get(['ssConfig'])).ssConfig || {};
-  const config = Object.assign({}, DEFAULTS, stored);
+  const flatStored = (typeof globalThis.ssFlattenConfig === 'function') ? globalThis.ssFlattenConfig(stored) : stored;
+  const config = Object.assign({}, DEFAULTS, flatStored);
 
   renderGroups(config);
   updateOverview(config);
@@ -737,6 +779,7 @@ async function main() {
       const target = btn.dataset.panel;
       const items = nav.querySelectorAll('.nav-item');
       for (let i = 0; i < items.length; i++) items[i].classList.toggle('active', items[i] === btn);
+      for (let i = 0; i < items.length; i++) items[i].setAttribute('aria-current', items[i] === btn ? 'page' : 'false');
       const panels = document.querySelectorAll('.panel');
       for (let i = 0; i < panels.length; i++) panels[i].classList.toggle('active', panels[i].id === 'panel-' + target);
       const meta = TITLES[target] || ['', ''];
@@ -755,6 +798,28 @@ async function main() {
   // no-op property) and the WebRTC policy silently stayed whatever it was. The
   // preset row therefore never actually changed the one setting it advertised.
   // Three explicit levels now, each patching the enum through `.value`.
+  // UI-4: apply profile preset when the dropdown changes, so the profile is
+  // not inert. The save path persists the resolved flat keys.
+  const profileSelect = document.querySelector('[data-key="profile"]');
+  if (profileSelect) {
+    profileSelect.addEventListener('change', function () {
+      const name = profileSelect.value;
+      const patch = presets[name];
+      if (!patch || name === 'balanced') return;
+      Object.keys(patch).forEach(function (key) {
+        const el = document.querySelector('[data-key="' + key + '"]');
+        if (!el) return;
+        if (!el.dataset.kind) {
+          el.checked = !!patch[key];
+        } else {
+          el.value = patch[key];
+          el.dispatchEvent(new Event('input', { bubbles: false }));
+        }
+      });
+      updateOverview(collect());
+      toast('Profile applied: ' + name + '. Remember to save.');
+    });
+  }
   const presets = {
     light: {
       canvasNoiseStrength: 0.6, webglJitter: 0.6, audioNoiseStrength: 1e-8,
@@ -882,6 +947,7 @@ async function main() {
 
   if ($('resetAllBtn')) {
     $('resetAllBtn').addEventListener('click', async function () {
+      if (!window.confirm('Reset all settings to defaults? This cannot be undone.')) return;
       await remove('ssConfig');
       toast('Settings restored to defaults');
       setTimeout(function () { location.reload(); }, 600);
@@ -907,20 +973,19 @@ async function main() {
         } catch (e) { /* best effort */ }
         const rotation = (await get(['ss_rotation_info'])).ss_rotation_info || {};
         await set({ ss_rotation_info: { lastRotation: new Date().toISOString(), rotationCount: (rotation.rotationCount || 0) + 1 } });
+        toast('New identity generated - reloading tabs');
+        try {
+          const tabs = await new Promise(function (resolve) {
+            chrome.tabs.query({}, function (list) { resolve(list || []); });
+          });
+          for (const t of tabs) {
+            if (t && t.url && /^https?:/i.test(t.url) && t.id != null) chrome.tabs.reload(t.id);
+          }
+        } catch (e) { /* reload is best-effort */ }
+        return;
       }
-      toast('New identity generated - reloading tabs');
+      toast('New identity generated');
       refreshStats();
-      // A new salt only reaches the page on the next load, so reload every
-      // http(s) tab here the way the popup already does. Without this the new
-      // identity existed in storage but no open page ever picked it up.
-      try {
-        const tabs = await new Promise(function (resolve) {
-          chrome.tabs.query({}, function (list) { resolve(list || []); });
-        });
-        for (const t of tabs) {
-          if (t && t.url && /^https?:/i.test(t.url) && t.id != null) chrome.tabs.reload(t.id);
-        }
-      } catch (e) { /* reload is best-effort */ }
     });
   }
 

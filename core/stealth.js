@@ -54,7 +54,7 @@
     // ssNormalizeConfig were added after this list was written and stayed
     // enumerable, which is exactly the drift the gate now prevents.
     const makeNonEnumerable = [
-      'ssConfig', 'ssLoadConfig', 'ssValidateConfig', 'ssMigrateConfig', 'ssNormalizeConfig',
+      'ssConfig', 'ssLoadConfig', 'ssValidateConfig', 'ssMigrateConfig', 'ssNormalizeConfig', 'ssFlattenConfig',
       'ssGetSalt', 'ssConfigSchema', 'ssDefaultConfig', 'ssFlatDefaults',
       'ssFlatToNested', 'ssDeriveSeed', 'ssDeriveSeedSimple',
       'ssDeriveStrongSeed', 'ssDeriveSurfaceSeed', 'ssHashString', 'ssMixString',

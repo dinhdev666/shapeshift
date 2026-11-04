@@ -233,6 +233,8 @@
             }
           }
           valid[key] = g;
+        } else {
+          dropped.push(key);
         }
         continue;
       }
@@ -295,7 +297,7 @@
       });
       const stored = globalThis.ssNormalizeConfig(result.ssConfig || {});
       const validated = globalThis.ssValidateConfig(stored);
-      if (validated.dropped.length > 0 && config.debug) {
+      if (validated.dropped.length > 0 && (merged.debug || config.debug)) {
         console.log('[shapeshift][config] Dropped invalid keys:', validated.dropped);
       }
       const merged = {};

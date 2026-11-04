@@ -33,8 +33,8 @@
     state[1] = (smix() * 0x100000000) >>> 0;
     state[2] = (smix() * 0x100000000) >>> 0;
     state[3] = (smix() * 0x100000000) >>> 0;
-
-    // Rotl helper
+    // Guard against the all-zero state, which would make xoshiro emit zeros forever.
+    if (state[0] === 0 && state[1] === 0 && state[2] === 0 && state[3] === 0) state[0] = 1;
     function rotl(x, k) {
       return ((x << k) | (x >>> (32 - k))) >>> 0;
     }

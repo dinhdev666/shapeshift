@@ -190,13 +190,35 @@
     }
   }
 
+  // Reverse of flatToNested: expand nested groups into the flat keys the Options
+  // page and popup render. Without this, a stored ssConfig (nested groups) is
+  // merged straight into DEFAULTS (flat keys) and every nested-group control
+  // silently shows its default value.
+  globalThis.ssFlattenConfig = function (stored) {
+    if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return {};
+    const out = {};
+    for (const k in stored) {
+      const v = stored[k];
+      if (v && typeof v === 'object' && !Array.isArray(v)) {
+        for (const gk in v) out[gk] = v[gk];
+      } else {
+        out[k] = v;
+      }
+    }
+    // Alias: schema flattens webrtc.mode to `mode`; the UI uses `webrtcMode`.
+    if (out.mode !== undefined && out.webrtcMode === undefined) out.webrtcMode = out.mode;
+    if (out.webrtcMode !== undefined && out.mode === undefined) out.mode = out.webrtcMode;
+    return out;
+  };
+
   globalThis.ssConfigSchema = {
     version: version,
     defaults: defaults,
     flatDefaults: flatDefaults,
     flatToNested: flatToNested,
     migrations: migrations,
-    presets: presets
+    presets: presets,
+    flattenConfig: globalThis.ssFlattenConfig
   };
 
   // Convenience aliases so popup.js / options.js can render defaults without

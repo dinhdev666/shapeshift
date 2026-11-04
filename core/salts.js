@@ -15,8 +15,15 @@
   // One cache and one in-flight promise per storage key: concurrent getSalt()
   // calls for the same origin converge on a single salt, and calls for two
   // different origins never block or overwrite each other.
+  const MAX_CACHE = 64;
   const cachedSalts = new Map();
   const inflightSalts = new Map();
+  function evictCache() {
+    while (cachedSalts.size > MAX_CACHE) {
+      const firstKey = cachedSalts.keys().next().value;
+      cachedSalts.delete(firstKey);
+    }
+  }
 
   function logDebug (...args) {
     try {
@@ -113,6 +120,11 @@
   }
 
   async function createSalt (key) {
+    // Validate scope to avoid orphaned salt keys.
+    const scope = key === STORAGE_KEY ? '' : key.slice(STORAGE_KEY.length + 1);
+    if (scope && !/^[a-z]+:\/\/[^\/]+$/.test(scope)) {
+      throw new Error('Invalid salt scope');
+    }
     const newSalt = randomHex128();
     try {
       // P1 (determinism contract): the old order cached the fresh salt *before*
@@ -149,6 +161,9 @@
   }
 
   function getSalt (scope) {
+    if (scope && !/^[a-z]+:\/\/[^\/]+$/.test(scope)) {
+      return Promise.reject(new Error('Invalid salt scope'));
+    }
     const key = saltKey(scope);
     if (cachedSalts.has(key)) return Promise.resolve(cachedSalts.get(key));
     if (inflightSalts.has(key)) return inflightSalts.get(key);
@@ -189,20 +204,18 @@
         for (const key of Object.keys(changes)) {
           if (key !== STORAGE_KEY && key.indexOf(STORAGE_KEY + ':') !== 0) continue;
           const next = changes[key].newValue;
+          const prev = cachedSalts.get(key);
+          if (next === prev) continue; // no change; avoid spurious epoch bump
           if (next) {
             logDebug("stored salt changed; adopting", key);
             cachedSalts.set(key, next);
+            evictCache();
           } else {
-            // The key was removed (a rotation): forget it so the next read
-            // regenerates instead of serving the rotated-away value.
             logDebug("stored salt removed", key);
             cachedSalts.delete(key);
           }
           touched = true;
         }
-        // P2 7.1 (seed epoch): the salt is the root of every derived seed, so
-        // replacing it invalidates every value already handed to a hook. Bump
-        // the epoch at the one place a salt becomes live or goes away.
         if (touched && typeof globalThis.ssBumpSeedEpoch === 'function') globalThis.ssBumpSeedEpoch();
       });
     }

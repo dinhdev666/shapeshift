@@ -75,6 +75,7 @@
         return Number(v.split('.')[0]) >= realMajor;
       });
       if (fresh.length > 0) candidates = fresh;
+      else candidates = [CHROME_STABLE_VERSIONS[CHROME_STABLE_VERSIONS.length - 1]];
     }
     const idx = Math.abs(Number(hash) || 0) % candidates.length;
     const full = candidates[idx];

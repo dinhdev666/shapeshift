@@ -76,7 +76,7 @@ function toast (message) {
   el.textContent = message;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2400);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 4000);
 }
 
 async function activeTab () {
@@ -252,7 +252,8 @@ async function main () {
   if ($('currentSite')) $('currentSite').textContent = host;
 
   const data = await storageGet(['ssConfig', 'ss_site_settings']);
-  const config = Object.assign({}, DEFAULTS, data.ssConfig || {});
+  const flatStored = (typeof globalThis.ssFlattenConfig === 'function') ? globalThis.ssFlattenConfig(data.ssConfig || {}) : (data.ssConfig || {});
+  const config = Object.assign({}, DEFAULTS, flatStored);
   const siteSettings = data.ss_site_settings || {};
   const siteEntry = origin ? siteSettings[origin] : null;
   const enabled = siteEntry ? siteEntry.enabled !== false : true;
@@ -308,14 +309,17 @@ async function main () {
         } catch (e) { /* best effort */ }
         const rotation = (await storageGet(['ss_rotation_info'])).ss_rotation_info || {};
         await storageSet({ ss_rotation_info: { lastRotation: new Date().toISOString(), rotationCount: (rotation.rotationCount || 0) + 1 } });
+        toast('New identity generated - reloading tabs');
+        try {
+          const tabs = await chrome.tabs.query({});
+          for (const t of tabs) {
+            if (t && t.url && /^https?:/i.test(t.url)) chrome.tabs.reload(t.id);
+          }
+        } catch (e) { }
+        setTimeout(function () { window.close(); }, 900);
+        return;
       }
-      toast('New identity generated - reloading tabs');
-      try {
-        const tabs = await chrome.tabs.query({});
-        for (const t of tabs) {
-          if (t && t.url && /^https?:/i.test(t.url)) chrome.tabs.reload(t.id);
-        }
-      } catch (e) { }
+      toast('New identity generated');
       setTimeout(function () { window.close(); }, 900);
     });
   }

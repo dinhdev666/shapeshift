@@ -81,14 +81,14 @@ _start    │  (one-shot message listener)                        │
 ```
 
 **Key points:**
-- The MAIN world publishes the nonce first (line 2033 of `page_world_injector.js`).
+- The MAIN world publishes the nonce first (in `page_world_injector.js`, search for `ssPageWorldNonce`).
 - `bootstrap.js` (line 24) sends `SS_PAGE_WORLD_HELLO` to trigger a re-announce
   if its listener was registered after the first `READY`.
 - The injector uses a **one-shot latch** (not `{ once: true }` on
   `addEventListener`, which consumed the HELLO and left no receiver for
   `SS_INIT_PAGE_HOOKS`). The P0 guard for this is in `verify.mjs` line 279.
 - Config is **not secret**: the page can read every field. The nonce + whitelist
-  (`CONFIG_BOUNDS` in `page_world_injector.js` line 54) + one-shot latch are what
+  (`CONFIG_BOUNDS` in `page_world_injector.js`) + one-shot latch are what
   prevent a forged first message.
 
 ---

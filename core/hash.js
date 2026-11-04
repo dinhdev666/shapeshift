@@ -115,8 +115,8 @@
    * @returns {number} Unsigned 32-bit per-surface seed.
    */
   function deriveSurfaceSeed (baseSalt, origin, surfaceId, iterations = 64) {
-    const mixed = mixString('ss.surface', surfaceId, baseSalt, origin || "");
-    return deriveStrongSeed(mixed, surfaceId, clampIterations(iterations, 64));
+    const mixed = mixString('ss.surface.v2', baseSalt, origin || "", surfaceId);
+    return deriveStrongSeed(mixed, "", clampIterations(iterations, 64));
   }
 
   // Legacy derivation for backwards compatibility. The retired version XORed

@@ -433,7 +433,12 @@ async function checkAndRotateFingerprint() {
   const nowMs = Date.now();
   for (let i = 0; i < origins.length; i++) {
     const origin = origins[i];
-    const entry = siteSettings[origin];
+    // Re-read the latest site settings on each iteration so a rotation that
+    // updated an earlier origin does not leave this one working from a stale
+    // snapshot.
+    const freshResult = await chrome.storage.local.get(['ss_site_settings']);
+    const freshSettings = freshResult.ss_site_settings || {};
+    const entry = freshSettings[origin];
     if (!entry || entry.rotationHours == null) continue;
 
     const originIntervalHours = Math.max(0.5, Number(entry.rotationHours));
@@ -447,9 +452,10 @@ async function checkAndRotateFingerprint() {
     let rotationError = null;
     try {
       await rotateOriginSalt(origin);
-      // Record the rotation time on the site settings entry.
       const updated = Object.assign({}, entry, { lastRotation: new Date().toISOString() });
-      await chrome.storage.local.set({ ss_site_settings: Object.assign({}, siteSettings, { [origin]: updated }) });
+      const latestResult = await chrome.storage.local.get(['ss_site_settings']);
+      const latestSettings = latestResult.ss_site_settings || {};
+      await chrome.storage.local.set({ ss_site_settings: Object.assign({}, latestSettings, { [origin]: updated }) });
     } catch (e) {
       rotationError = e;
     }
