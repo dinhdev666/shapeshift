@@ -115,6 +115,11 @@
   // balanced defaults, so only the values that actually change per profile
   // need to appear here. The hooks read the final merged config, so the
   // override takes effect on the next tab load without any hook-level changes.
+  // BUG-3: this is the ONLY preset table. options/options.js used to keep a
+  // second copy that disagreed with this one on canvasNoiseStrength (0.6 vs 1),
+  // webglJitter and audioNoiseStrength, so the profile dropdown and the preset
+  // buttons wrote different values for the same profile name. The Options page
+  // now reads ssConfigSchema.presets instead of carrying its own map.
   const presets = {
     light: {
       canvasNoiseStrength: 1,
@@ -125,8 +130,15 @@
       enableAudioNoise: true,
       enableAudioProtection: true,
       timingJitter: 2,
-      useGaussianNoise: false
+      useGaussianNoise: false,
+      enableDetectionResistance: false,
+      webrtcMode: 'off',
+      enableWebGPUProtection: false,
+      enableKeyboardProtection: false
     },
+    // 'balanced' stays empty on purpose: it *is* the defaults, so it needs no
+    // overrides, and ssNormalizeConfig() treats it as a no-op. The Options
+    // button restores the schema defaults for every key the others touch.
     balanced: {},
     maximum: {
       canvasNoiseStrength: 4,
@@ -141,7 +153,11 @@
       timingJitter: 5,
       useGaussianNoise: true,
       perOriginFingerprint: true,
-      useStrongKDF: true
+      useStrongKDF: true,
+      enableDetectionResistance: true,
+      webrtcMode: 'relay-only',
+      enableWebGPUProtection: true,
+      enableKeyboardProtection: true
     }
   };
 
@@ -237,4 +253,34 @@
   // in four places, and a mismatched literal made the ring arc jump by a full
   // turn at 100 %. Expose it as a single ss* global so JS and CSS share one value.
   globalThis.ssRingCircumference = 251.3;
+
+  // IMP-4: the ordered counter list, shared by the popup, the Options page and
+  // the gates. Both UIs hand-summed the same thirteen `total*` fields, so a new
+  // counter meant editing three places and any missed copy silently displayed a
+  // different total. `id` is the label stats_tracker.js increments and the MAIN
+  // world posts; `field` is the aggregate the service worker writes.
+  globalThis.ssStatCategories = [
+    { id: 'canvasReads', field: 'totalCanvasReads' },
+    { id: 'webglCalls', field: 'totalWebGLCalls' },
+    { id: 'audioCalls', field: 'totalAudioCalls' },
+    { id: 'navigatorReads', field: 'totalNavigatorReads' },
+    { id: 'webrtcCalls', field: 'totalWebRTCCalls' },
+    { id: 'screenReads', field: 'totalScreenReads' },
+    { id: 'fontReads', field: 'totalFontReads' },
+    { id: 'timezoneReads', field: 'totalTimezoneReads' },
+    { id: 'sensorReads', field: 'totalSensorReads' },
+    { id: 'mediaCodecReads', field: 'totalMediaCodecReads' },
+    { id: 'drmReads', field: 'totalDrmReads' },
+    { id: 'geolocationReads', field: 'totalGeolocationReads' },
+    { id: 'touchReads', field: 'totalTouchReads' }
+  ];
+
+  // Sum every aggregate into the single "signals" number both UIs show.
+  globalThis.ssSumStats = function (stats) {
+    const source = stats && typeof stats === 'object' ? stats : {};
+    return globalThis.ssStatCategories.reduce(function (sum, entry) {
+      const value = Number(source[entry.field]);
+      return sum + (Number.isFinite(value) ? value : 0);
+    }, 0);
+  };
 })();

@@ -70,8 +70,9 @@ The UI is intentionally opinionated: deep-space glass, aurora accents, Inter for
 | `ssConfig` | flat config object (see `options/options.js` `DEFAULTS`) | options page |
 | `ss_salt` | hex string | `core/salts.js` |
 | `ss_stats` | counters, e.g. `totalCanvasReads`, `sitesProtected` | `stats_tracker.js` / service worker |
-| `ss_site_settings` | `{ "<origin>": { enabled: boolean, reason?: string } }` | popup + options |
+| `ss_site_settings` | `{ "<origin>": { enabled: boolean, reason?: string, pausedUntil?: ISO, persona?: string, rotationHours?: number, noiseOverrides?: object } }` | popup + options |
 | `ss_rotation_info` | `{ lastRotation: ISO, rotationCount: number }` | service worker |
+| `ss_rotation_history` | `Array<{ at: ISO, scope: "global" \| "<origin>", reason: string }>`, capped at 10 | service worker |
 | `ss_diagnostics` | `{ failedInstallers, totalInstallers, lastFailureAt, lastFailureOrigin }` (storage.session) | `background/service-worker.js` |
 | `ss_salt_generation` | integer generation counter (chrome.storage.local) | `background/service-worker.js` (salt-change guard) |
 | `ss_tab_gen_<tabId>` | integer generation stamp (chrome.storage.session) | `background/service-worker.js` (salt-change guard) |

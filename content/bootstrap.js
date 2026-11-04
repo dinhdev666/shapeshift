@@ -32,7 +32,22 @@
           const currentOrigin = location.origin;
           const siteSetting = siteSettings[currentOrigin];
 
+          // FEAT-1: a pause can expire. `pausedUntil` is an ISO timestamp; a
+          // valid timestamp in the past means the pause lapsed, so protection
+          // resumes without the user having to remember to un-pause. An absent
+          // or unparseable value keeps the old indefinite-pause behaviour, so a
+          // hand-edited entry can never silently disable protection.
+          let pauseActive = false;
           if (siteSetting && siteSetting.enabled === false) {
+            if (typeof siteSetting.pausedUntil === 'string' && siteSetting.pausedUntil) {
+              const pauseUntilMs = Date.parse(siteSetting.pausedUntil);
+              pauseActive = !Number.isFinite(pauseUntilMs) || pauseUntilMs > Date.now();
+            } else {
+              pauseActive = true;
+            }
+          }
+
+          if (pauseActive) {
             if (config.debug) {
               console.log('[shapeshift][bootstrap] Protection disabled for this site (whitelisted)');
             }
@@ -153,16 +168,15 @@
       // asks for its own stream keyed on (salt, origin, surfaceId); the shared
       // `prng` stays for timing jitter and as a fallback.
       const deriveSurfaceSeed = globalThis.ssDeriveSurfaceSeed;
-      const deriveSurfaceSeedAsync = globalThis.ssDeriveSurfaceSeedAsync;
       const surfaceOrigin = config.perOriginFingerprint ? location.origin : '';
-      const surfaceSeedFor = (surfaceId) => {
-        // sync fast path when async not available
-        if (!(config.useStrongKDF !== false && deriveSurfaceSeedAsync)) {
-          return deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed;
-        }
-        // async not awaited here; prngFor is sync. Fall back to sync surface seed.
-        return deriveSurfaceSeed ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId) : seed;
-      };
+      // Surface streams are consumed synchronously at hook-install time, so the
+      // synchronous per-surface KDF is the only form usable here. The async
+      // binding used to be read purely as a truthiness guard while both
+      // branches returned the sync value - a branch that could never run.
+      const surfaceSeedFor = (surfaceId) =>
+        typeof deriveSurfaceSeed === 'function'
+          ? deriveSurfaceSeed(salt, surfaceOrigin, surfaceId)
+          : seed;
       const prngFor = (surfaceId) => createPRNG(surfaceSeedFor(surfaceId));
 
       // Noise gets its own surface stream so canvas/audio reads do not consume

@@ -73,6 +73,10 @@
       // knob, but it is still an ss-prefixed global that Object.keys() would
       // expose. It belongs in the same non-enumerable set.
       'ssRingCircumference',
+      // IMP-4: the shared counter list and its summing helper are ss-prefixed
+      // globals read by the popup and the Options page; leaving them enumerable
+      // would put two more names in Object.keys(globalThis).
+      'ssStatCategories', 'ssSumStats',
       // P4: the worker shim builder is a content/worker_shim.js global that
       // must not appear in Object.keys(globalThis).
       'ssBuildWorkerShim',

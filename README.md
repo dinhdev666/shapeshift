@@ -189,3 +189,16 @@ Run the snippet twice — the values must be identical both times and different 
 MIT — see [LICENSE](LICENSE).
 
 Copyright (c) **Phạm Văn Định**.
+
+## Settings sync
+
+ShapeShift mirrors `ssConfig` into `chrome.storage.sync` so another browser
+signed into the same profile can pick the settings up. The rule is
+**local settings win**: a synced config is adopted automatically only when
+this machine has never saved its own. Once it has, the sync store is never
+read again on its own.
+
+To override that deliberately, open **Advanced** and press
+**Pull settings from sync**. The pulled config goes through the same
+normalize + validate path as every other write, so a config from an older
+build cannot reach the hooks raw. The salt never travels through sync.

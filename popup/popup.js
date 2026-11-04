@@ -55,13 +55,6 @@ function storageSet (items) {
   });
 }
 
-function _storageRemove (keys) {
-  return new Promise(function (resolve) {
-    try { chrome.storage.local.remove(keys, function () { resolve(true); }); }
-    catch (e) { resolve(false); }
-  });
-}
-
 function formatNumber (n) {
   const v = Number(n) || 0;
   if (v >= 1e6) return (v / 1e6).toFixed(1).replace('.0', '') + 'M';
@@ -171,7 +164,9 @@ async function loadStats () {
   const data = await storageGet(['ss_stats', 'ss_rotation_info']);
   const stats = data.ss_stats || {};
   const rotation = data.ss_rotation_info || {};
-  const total = (stats.totalCanvasReads || 0) + (stats.totalWebGLCalls || 0) + (stats.totalAudioCalls || 0) + (stats.totalNavigatorReads || 0) + (stats.totalWebRTCCalls || 0) + (stats.totalScreenReads || 0) + (stats.totalFontReads || 0) + (stats.totalTimezoneReads || 0) + (stats.totalSensorReads || 0) + (stats.totalMediaCodecReads || 0) + (stats.totalDrmReads || 0) + (stats.totalGeolocationReads || 0) + (stats.totalTouchReads || 0);
+  // IMP-4: one shared list (core/config-schema.js) instead of a hand-written
+  // thirteen-term sum that had to be kept in sync in three files.
+  const total = typeof globalThis.ssSumStats === 'function' ? globalThis.ssSumStats(stats) : 0;
   if ($('sitesProtected')) $('sitesProtected').textContent = formatNumber(stats.sitesProtected || 0);
   if ($('totalCalls')) $('totalCalls').textContent = formatNumber(total);
   if ($('rotationCount')) $('rotationCount').textContent = formatNumber(rotation.rotationCount || 0);

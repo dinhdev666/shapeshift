@@ -4,6 +4,7 @@
 // Initialize on install or startup
 chrome.runtime.onInstalled.addListener(async () => {
   await initializeStorage();
+  await sweepExpiredPauses();
   await checkAndRotateFingerprint();
   await setupRotationAlarm();
   await setupSaltGuardAlarm();
@@ -13,6 +14,7 @@ chrome.runtime.onStartup.addListener(async () => {
   // Re-assert the storage contract on every browser start: a cleared profile,
   // a partial sync, or a manual wipe must not leave the UI with undefined keys.
   await initializeStorage();
+  await sweepExpiredPauses();
   await checkRotateOnStartup();
   await setupRotationAlarm();
   await setupSaltGuardAlarm();
@@ -236,14 +238,18 @@ async function getDiagnostics() {
 
 async function reportHookStatus(failed, total, origin) {
   const previous = await getDiagnostics();
-  const diagnostics = {
+  // Spread the previous value first: core/config.js records invalidConfigKeys /
+  // invalidConfigAt in the same key, and rebuilding the object from scratch on
+  // every page load erased them milliseconds after they were written, so the
+  // Diagnostics pane could never show a config-validation problem.
+  const diagnostics = Object.assign({}, previous, {
     failedInstallers: Number(failed) > 0 ? Number(failed) : 0,
     totalInstallers: Number(total) > 0 ? Number(total) : previous.totalInstallers,
     // Keep the last real failure around even after a clean load, so Diagnostics
     // can say when the problem was last seen instead of going blank.
     lastFailureAt: Number(failed) > 0 ? new Date().toISOString() : previous.lastFailureAt,
     lastFailureOrigin: Number(failed) > 0 ? (origin || null) : previous.lastFailureOrigin
-  };
+  });
   await chrome.storage.session.set({ [DIAGNOSTICS_KEY]: diagnostics });
 
   try {
@@ -379,6 +385,32 @@ async function resetStatistics() {
   });
 }
 
+// FEAT-1: the enforcement lives in content/bootstrap.js, which treats a lapsed
+// pausedUntil as "not paused". This sweep only tidies storage so a lapsed pause
+// does not linger as enabled:false forever and confuse the Sites pane. It is
+// deliberately opportunistic (install, startup, salt-guard alarm) rather than a
+// dedicated one-minute alarm: a pause must never be enforced by a timer.
+async function sweepExpiredPauses() {
+  const result = await chrome.storage.local.get(['ss_site_settings']);
+  const store = result.ss_site_settings || {};
+  const now = Date.now();
+  let changed = false;
+  Object.keys(store).forEach(function (origin) {
+    const entry = store[origin];
+    if (!entry || entry.enabled !== false || typeof entry.pausedUntil !== 'string') return;
+    const until = Date.parse(entry.pausedUntil);
+    if (!Number.isFinite(until) || until > now) return;
+    delete entry.pausedUntil;
+    delete entry.enabled;
+    delete entry.reason;
+    if (Object.keys(entry).length === 0) delete store[origin];
+    else store[origin] = entry;
+    changed = true;
+  });
+  if (changed) await chrome.storage.local.set({ ss_site_settings: store });
+  return changed;
+}
+
 // ============================================================================
 // AUTOMATIC FINGERPRINT ROTATION
 // ============================================================================
@@ -488,6 +520,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'fingerprint-rotation-check') {
     await checkAndRotateFingerprint();
   } else if (alarm.name === SALT_GUARD_ALARM) {
+    await sweepExpiredPauses();
     await reloadStaleTabs();
   }
 });
@@ -519,6 +552,7 @@ async function rotateFingerprintNow() {
     });
 
     console.log('[ShapeShift Rotation] Fingerprint rotated successfully');
+    await recordRotationHistory('global', 'full-rotation');
 
     // Both side effects are opt-in (Security 3): a background rotation used to
     // reload every open tab and raise an OS notification unconditionally, which
@@ -634,7 +668,6 @@ async function rotateOriginSalt(origin) {
     .filter(function (t) { return typeof t.id === 'number'; })
     .map(function (t) { return 'ss_tab_gen_' + t.id; });
   if (genKeys.length > 0) {
-    const _existing = await chrome.storage.session.get(genKeys);
     const genRes = await chrome.storage.local.get(['ss_salt_generation']);
     const gen = typeof genRes.ss_salt_generation === 'number' ? genRes.ss_salt_generation : 0;
     genKeys.forEach(function (k) {
@@ -643,6 +676,7 @@ async function rotateOriginSalt(origin) {
     await chrome.storage.session.set(tabStamps);
   }
 
+  await recordRotationHistory(origin, 'origin-rotation');
   console.log('[ShapeShift Rotation] Per-origin salt rotated for:', origin);
 }
 
@@ -695,6 +729,30 @@ const SALT_GENERATION_KEY = 'ss_salt_generation';
 const TAB_STAMP_PREFIX = 'ss_tab_gen_';
 const SALT_GUARD_ALARM = 'salt-integrity-check';
 
+// FEAT-2: a bounded rotation log. `ss_rotation_info` only carries the latest
+// timestamp and a count, so the Identity pane could say "rotated 7 times" but
+// never when, or whether a given rotation was global or per-origin. A short
+// history gives a bug report a timeline. Capped at 10 entries so it can never
+// grow into a meaningful storage footprint, and it holds no salt or seed -
+// only a timestamp, a scope and a fixed reason label.
+const ROTATION_HISTORY_KEY = 'ss_rotation_history';
+const ROTATION_HISTORY_LIMIT = 10;
+
+async function recordRotationHistory(scope, reason) {
+  try {
+    const result = await chrome.storage.local.get([ROTATION_HISTORY_KEY]);
+    const previous = Array.isArray(result[ROTATION_HISTORY_KEY]) ? result[ROTATION_HISTORY_KEY] : [];
+    const entry = { at: new Date().toISOString(), scope: String(scope), reason: String(reason) };
+    const next = previous.concat([entry]).slice(-ROTATION_HISTORY_LIMIT);
+    await chrome.storage.local.set({ [ROTATION_HISTORY_KEY]: next });
+    return next;
+  } catch (e) {
+    // A history write must never abort the rotation it describes.
+    console.warn('[ShapeShift Rotation] Could not record rotation history:', e);
+    return null;
+  }
+}
+
 async function getSaltGeneration() {
   const result = await chrome.storage.local.get([SALT_GENERATION_KEY]);
   return Number(result[SALT_GENERATION_KEY]) || 0;
@@ -734,13 +792,18 @@ function isReloadable(url) {
 // path only ever reloads the tab the user just brought to the foreground.
 async function reloadStaleTabs() {
   const generation = await getSaltGeneration();
-  const tabs = await chrome.tabs.query({});
+  const tabs = (await chrome.tabs.query({})).filter(
+    (tab) => typeof tab.id === 'number' && isReloadable(tab.url)
+  );
+  if (!tabs.length) return 0;
+  // One batched read for every candidate tab. The per-tab await cost an IPC
+  // round-trip each, inside an alarm handler - the exact place Chrome may kill
+  // the worker mid-loop.
+  const keys = tabs.map((tab) => TAB_STAMP_PREFIX + tab.id);
+  const stamps = await chrome.storage.session.get(keys);
   let reloaded = 0;
   for (const tab of tabs) {
-    if (!isReloadable(tab.url)) continue;
-    const key = TAB_STAMP_PREFIX + tab.id;
-    const result = await chrome.storage.session.get([key]);
-    const stamped = result[key];
+    const stamped = stamps[TAB_STAMP_PREFIX + tab.id];
     if (typeof stamped !== 'number' || stamped >= generation) continue;
     try {
       await chrome.tabs.reload(tab.id);

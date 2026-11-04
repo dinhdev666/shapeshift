@@ -75,6 +75,11 @@ const GROUPS = {
     { key: 'notifyOnRotation', name: 'Notify on rotation', desc: 'Show a system notification when the identity rotates.' },
     { key: 'reloadTabsOnRotation', name: 'Reload tabs on rotation', desc: 'Refresh the focused tab of each window so it picks up the new identity. Off by default: reloading every tab on every rotation looks like a device change to every site at once.' },
     { key: 'clearSiteDataOnRotation', name: 'Clear site data on rotation', desc: 'Also erase cookies and site storage for the pages you visit, so the new identity gets a fresh session. This logs you out of those sites.' },
+    // IMP-1: both keys were read by background/service-worker.js but had no
+    // control anywhere, so the bfcache guard cadence and the rotation reload
+    // scope could only be changed by hand-editing storage.
+    { key: 'rotationReloadScope', name: 'Rotation reload scope', desc: 'Which tabs are refreshed when the identity rotates.', enum: true, select: [['active', 'Focused tab of each window'], ['all', 'Every open tab']] },
+    { key: 'saltGuardIntervalMinutes', name: 'Salt guard check', desc: 'How often to look for tabs left on an old identity, in minutes.', range: [1, 1440, 1] },
     { key: 'debug', name: 'Debug logging', desc: 'Verbose console output for troubleshooting.' }
   ]
 };
@@ -289,7 +294,8 @@ function updateOverview(config) {
 async function refreshStats() {
   const data = await get(['ss_stats', 'ss_site_settings', 'ss_rotation_info']);
   const stats = data.ss_stats || {};
-  const total = (stats.totalCanvasReads || 0) + (stats.totalWebGLCalls || 0) + (stats.totalAudioCalls || 0) + (stats.totalNavigatorReads || 0) + (stats.totalWebRTCCalls || 0) + (stats.totalScreenReads || 0) + (stats.totalFontReads || 0) + (stats.totalTimezoneReads || 0) + (stats.totalSensorReads || 0) + (stats.totalMediaCodecReads || 0) + (stats.totalDrmReads || 0) + (stats.totalGeolocationReads || 0) + (stats.totalTouchReads || 0);
+  // IMP-4: same shared list the popup uses, so both UIs report one total.
+  const total = typeof globalThis.ssSumStats === 'function' ? globalThis.ssSumStats(stats) : 0;
   const sites = Object.keys(data.ss_site_settings || {}).length;
   if ($('statSites')) $('statSites').textContent = String(sites);
   if ($('statSignals')) $('statSignals').textContent = String(total);
@@ -344,6 +350,37 @@ async function renderDiagnostics() {
   if (diagnostics.lastFailureOrigin) {
     host.appendChild(diagnosticRow('Last failure origin', diagnostics.lastFailureOrigin));
   }
+
+  // IMP-2: core/config.js records the keys ssValidateConfig() rejected. Those
+  // were written to the same storage key this pane reads but were never shown,
+  // so the card said "All installers succeeded" while a config problem was
+  // silently active.
+  const rejected = Array.isArray(diagnostics.invalidConfigKeys) ? diagnostics.invalidConfigKeys : [];
+  if (rejected.length > 0) {
+    const shown = rejected.slice(0, 10).join(', ');
+    const more = rejected.length - 10;
+    host.appendChild(diagnosticRow('Rejected settings', shown + (more > 0 ? ' (+' + more + ' more)' : '')));
+    if (diagnostics.invalidConfigAt) {
+      host.appendChild(diagnosticRow('Rejected at', new Date(diagnostics.invalidConfigAt).toLocaleString()));
+    }
+  }
+
+  const clearBtn = document.createElement('button');
+  clearBtn.className = 'btn ghost';
+  clearBtn.type = 'button';
+  clearBtn.textContent = 'Clear diagnostics';
+  clearBtn.addEventListener('click', async function () {
+    try {
+      await new Promise(function (resolve) {
+        chrome.storage.session.remove(['ss_diagnostics'], function () { resolve(); });
+      });
+      toast('Diagnostics cleared');
+      renderDiagnostics();
+    } catch (e) {
+      toast('Could not clear diagnostics');
+    }
+  });
+  host.appendChild(clearBtn);
 }
 
 // Feature 7.3 (self-test surface): ask a real page to sample every surface.
@@ -496,6 +533,13 @@ function sanitizeSiteSettings(raw) {
     const cleaned = {};
     if (typeof entry.enabled === 'boolean') cleaned.enabled = entry.enabled;
     if (typeof entry.reason === 'string') cleaned.reason = entry.reason.slice(0, 200);
+    // FEAT-1: a timed pause travels with a config backup. Keep only a valid
+    // ISO timestamp, normalized, so a hand-edited import cannot create a pause
+    // that never expires or one carrying a garbage label.
+    if (typeof entry.pausedUntil === 'string' && entry.pausedUntil.length <= 40) {
+      const pausedUntilMs = Date.parse(entry.pausedUntil);
+      if (Number.isFinite(pausedUntilMs)) cleaned.pausedUntil = new Date(pausedUntilMs).toISOString();
+    }
     if (typeof entry.rotationHours === 'number' && Number.isFinite(entry.rotationHours)) {
       cleaned.rotationHours = Math.min(SITE_ROTATION_HOURS[1], Math.max(SITE_ROTATION_HOURS[0], entry.rotationHours));
     }
@@ -592,11 +636,25 @@ async function exportDiagnosticsToFile() {
     });
     diagnostics = (stored && stored.ss_diagnostics) || {};
   } catch (e) { /* session storage unavailable */ }
+  const storedConfig = (await get(['ssConfig'])).ssConfig || {};
+  const normalized = typeof globalThis.ssNormalizeConfig === 'function'
+    ? globalThis.ssNormalizeConfig(storedConfig)
+    : storedConfig;
+  const validated = typeof globalThis.ssValidateConfig === 'function'
+    ? globalThis.ssValidateConfig(normalized)
+    : { valid: normalized, dropped: [] };
   const payload = {
     app: 'ShapeShift',
     kind: 'ssDiagnostics',
     exportedAt: new Date().toISOString(),
-    diagnostics: diagnostics
+    diagnostics: diagnostics,
+    // FEAT-3: ship the effective config too. A bug report with hook health but
+    // no settings could not be reproduced. The config is normalized and
+    // validated first, so the file describes exactly what the hooks receive,
+    // and ss_salt is never read here - it is the root of every derived
+    // identity, so a shared file containing it would clone this machine's
+    // fingerprints onto the reporter's browser.
+    config: validated.valid
   };
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -631,7 +689,13 @@ async function renderSites() {
     const strong = document.createElement('strong');
     strong.textContent = origin;
     const span = document.createElement('span');
-    if (paused) span.textContent = 'Protection paused';
+    if (paused) {
+      // FEAT-1: say when a timed pause ends instead of implying it is permanent.
+      const pausedUntilMs = entry.pausedUntil ? Date.parse(entry.pausedUntil) : NaN;
+      span.textContent = Number.isFinite(pausedUntilMs)
+        ? 'Protection paused until ' + new Date(pausedUntilMs).toLocaleString()
+        : 'Protection paused';
+    }
     else if (entry.rotationHours != null || (entry.persona && entry.persona !== 'auto') || (entry.noiseOverrides && Object.keys(entry.noiseOverrides).length > 0)) span.textContent = 'Protection on (overrides active)';
     else span.textContent = 'Protection on';
     text.appendChild(strong);
@@ -645,6 +709,7 @@ async function renderSites() {
       if (!current[origin]) current[origin] = {};
       if (paused) {
         current[origin].enabled = true;
+        delete current[origin].pausedUntil;
         // Drop the entry entirely when no overrides remain, so the default
         // (protection on) is represented by absence.
         const keys = Object.keys(current[origin]);
@@ -652,7 +717,7 @@ async function renderSites() {
           delete current[origin];
         }
         await set({ ss_site_settings: current });
-        toast('Protection resumed on ' + origin);
+        toast('Protection resumed on ' + origin + ' - affected tabs reloaded');
         // Reload affected tabs so the resumed identity takes effect.
         try {
           const tabs = await new Promise(function (resolve) {
@@ -663,7 +728,18 @@ async function renderSites() {
       } else {
         current[origin] = Object.assign({}, current[origin], { enabled: false });
         await set({ ss_site_settings: current });
-        toast('Protection paused on ' + origin);
+        // IMP-6: reload the affected tabs here too. Pausing used to write the
+        // entry and stop, so the hooks already installed in the open tab kept
+        // running while the toast claimed protection was paused - and resuming
+        // silently reloaded, which made the two directions behave differently
+        // with nothing in the UI saying so.
+        try {
+          const tabs = await new Promise(function (resolve) {
+            chrome.tabs.query({ url: origin + '/*' }, function (list) { resolve(list || []); });
+          });
+          for (const t of tabs) if (t && t.id != null) chrome.tabs.reload(t.id);
+        } catch (e) { /* best effort */ }
+        toast('Protection paused on ' + origin + ' - affected tabs reloaded');
       }
       renderSites();
       refreshStats();
@@ -687,6 +763,37 @@ async function renderSites() {
         toast('Rotation failed for ' + origin);
       }
     });
+    // FEAT-1: a pause that expires on its own. Pausing indefinitely is right for
+    // a site the user distrusts, but the common case is "let me look at this one
+    // page with my real fingerprint" - and that user then forgets to resume.
+    if (!paused) {
+      const timedBtn = document.createElement('button');
+      timedBtn.className = 'btn ghost';
+      timedBtn.type = 'button';
+      timedBtn.textContent = 'Pause 1h';
+      timedBtn.title = 'Pause protection here for one hour';
+      timedBtn.setAttribute('aria-label', 'Pause protection on ' + origin + ' for one hour');
+      timedBtn.addEventListener('click', async function () {
+        const current = (await get(['ss_site_settings'])).ss_site_settings || {};
+        const until = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+        current[origin] = Object.assign({}, current[origin], {
+          enabled: false,
+          pausedUntil: until,
+          reason: 'Paused for one hour in options'
+        });
+        await set({ ss_site_settings: current });
+        try {
+          const tabs = await new Promise(function (resolve) {
+            chrome.tabs.query({ url: origin + '/*' }, function (list) { resolve(list || []); });
+          });
+          for (const t of tabs) if (t && t.id != null) chrome.tabs.reload(t.id);
+        } catch (e) { /* best effort */ }
+        toast('Protection paused on ' + origin + ' until ' + new Date(until).toLocaleTimeString());
+        renderSites();
+        refreshStats();
+      });
+      item.appendChild(timedBtn);
+    }
     item.appendChild(text);
     item.appendChild(btn);
     item.appendChild(rotBtn);
@@ -756,6 +863,127 @@ async function renderOverrides() {
   });
 }
 
+// FEAT-2: the rotation log recorded by background/service-worker.js. Built here
+// rather than in the markup so the card uses createElement + textContent like
+// every other dynamic list on this page.
+async function renderRotationHistory() {
+  const panel = $('panel-identity');
+  if (!panel) return;
+  let card = $('rotationHistoryCard');
+  if (!card) {
+    card = document.createElement('div');
+    card.className = 'card';
+    card.id = 'rotationHistoryCard';
+    const head = document.createElement('div');
+    head.className = 'card-head';
+    const title = document.createElement('h3');
+    title.textContent = 'Rotation history';
+    head.appendChild(title);
+    const listBody = document.createElement('div');
+    listBody.id = 'rotationHistoryBody';
+    listBody.className = 'rows';
+    card.appendChild(head);
+    card.appendChild(listBody);
+    panel.appendChild(card);
+  }
+  const body = $('rotationHistoryBody');
+  if (!body) return;
+  body.textContent = '';
+  const stored = await get(['ss_rotation_history']);
+  const history = Array.isArray(stored.ss_rotation_history) ? stored.ss_rotation_history : [];
+  if (!history.length) {
+    body.appendChild(diagnosticRow('No rotations yet', 'A rotation will appear here with its time and scope.'));
+    return;
+  }
+  history
+    .slice()
+    .reverse()
+    .forEach(function (entry) {
+      const at = entry && entry.at ? new Date(entry.at) : null;
+      const when = at && Number.isFinite(at.getTime()) ? at.toLocaleString() : 'Unknown time';
+      const scope = entry && entry.scope === 'global' ? 'All sites' : (entry && entry.scope) || 'Unknown scope';
+      const reason = (entry && entry.reason) || 'rotation';
+      body.appendChild(diagnosticRow(when, scope + ' - ' + reason));
+    });
+}
+
+// FEAT-4: one filter box for every settings pane. Pure DOM filtering - no
+// storage write, no new dependency, and the typed value is only compared
+// against textContent, never injected as HTML.
+function installSettingsFilter() {
+  const nav = $('nav');
+  if (!nav || !nav.parentElement) return;
+  if ($('settingsFilter')) return;
+  const wrap = document.createElement('div');
+  wrap.className = 'filter-wrap';
+  const input = document.createElement('input');
+  input.id = 'settingsFilter';
+  input.className = 'filter-input';
+  input.placeholder = 'Filter settings';
+  input.setAttribute('aria-label', 'Filter settings');
+  wrap.appendChild(input);
+  nav.parentElement.insertBefore(wrap, nav.nextSibling);
+  input.addEventListener('input', function () {
+    const term = input.value.trim().toLowerCase();
+    const rows = document.querySelectorAll('.row');
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      row.hidden = term !== '' && row.textContent.toLowerCase().indexOf(term) === -1;
+    }
+  });
+}// IMP-5: chrome.storage.sync is a one-way mirror by default - core/config.js
+// writes every ssConfig change there and only adopts it when local is ABSENT,
+// so a second machine that ever saved settings never sees the synced copy. This
+// gives the user an explicit, validated way to pull it back. Local keeps
+// winning automatically; the pull is the deliberate override.
+async function pullConfigFromSync() {
+  try {
+    const synced = await new Promise(function (resolve) {
+      chrome.storage.sync.get(['ssConfig'], function (result) { resolve(result || {}); });
+    });
+    if (!synced.ssConfig || typeof synced.ssConfig !== 'object' || Array.isArray(synced.ssConfig)) return false;
+    // Same normalize + validate path every other write uses, so a config from
+    // an older build or a hand-edited sync store cannot reach the hooks raw.
+    const normalized = typeof globalThis.ssNormalizeConfig === 'function'
+      ? globalThis.ssNormalizeConfig(synced.ssConfig)
+      : synced.ssConfig;
+    const validated = typeof globalThis.ssValidateConfig === 'function'
+      ? globalThis.ssValidateConfig(normalized)
+      : { valid: normalized, dropped: [] };
+    const cleaned = Object.assign({}, validated.valid);
+    cleaned.ssConfigVersion = (globalThis.ssConfigSchema && globalThis.ssConfigSchema.version) || 1;
+    await set({ ssConfig: cleaned });
+    if (validated.dropped && validated.dropped.length > 0) {
+      toast('Pulled settings, dropped: ' + validated.dropped.join(', '));
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// The control lives in the Advanced pane, next to the other import/export
+// actions, and is created here rather than in the markup so it needs no
+// dependency on the HTML layout.
+function installSyncPull() {
+  const panel = $('panel-advanced');
+  if (!panel || $('pullSyncBtn')) return;
+  const btn = document.createElement('button');
+  btn.className = 'btn ghost';
+  btn.id = 'pullSyncBtn';
+  btn.type = 'button';
+  btn.textContent = 'Pull settings from sync';
+  btn.setAttribute('aria-label', 'Pull settings from browser sync');
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    const pulled = await pullConfigFromSync();
+    btn.disabled = false;
+    toast(pulled ? 'Settings pulled from sync - reloading' : 'No synced settings found');
+    if (pulled) setTimeout(function () { location.reload(); }, 600);
+  });
+  panel.appendChild(btn);
+}
+
 async function main() {
   const stored = (await get(['ssConfig'])).ssConfig || {};
   const flatStored = (typeof globalThis.ssFlattenConfig === 'function') ? globalThis.ssFlattenConfig(stored) : stored;
@@ -766,6 +994,9 @@ async function main() {
   refreshStats();
   renderSites();
   renderOverrides();
+  renderRotationHistory();
+  installSettingsFilter();
+  installSyncPull();
   // Populate the Hook health card on load too. renderDiagnostics() was only
   // reachable from the Advanced nav click and the Refresh button, so the pane
   // showed placeholder text until the user interacted with it.
@@ -791,6 +1022,7 @@ async function main() {
       const meta = TITLES[target] || ['', ''];
       if ($('panelTitle')) $('panelTitle').textContent = meta[0];
       if ($('panelSub')) $('panelSub').textContent = meta[1];
+      if (target === 'identity') renderRotationHistory();
       if (target === 'sites') renderSites();
       if (target === 'advanced') renderDiagnostics();
       if (target === 'about' || target === 'overview') { updateOverview(collect()); refreshStats(); }
@@ -826,29 +1058,29 @@ async function main() {
       toast('Profile applied: ' + name + '. Remember to save.');
     });
   }
-  const presets = {
-    light: {
-      canvasNoiseStrength: 0.6, webglJitter: 0.6, audioNoiseStrength: 1e-8,
-      enableDetectionResistance: false, webrtcMode: 'off',
-      enableWebGPUProtection: false, enableKeyboardProtection: false
-    },
-    balanced: {
-      canvasNoiseStrength: 2, webglJitter: 2, audioNoiseStrength: 1e-7,
-      enableDetectionResistance: true, webrtcMode: 'block-host-srflx',
-      enableWebGPUProtection: true, enableKeyboardProtection: true
-    },
-    maximum: {
-      canvasNoiseStrength: 6, webglJitter: 6, audioNoiseStrength: 1e-6,
-      enableDetectionResistance: true, webrtcMode: 'relay-only',
-      enableWebGPUProtection: true, enableKeyboardProtection: true
-    }
-  };
+  // BUG-3: read the single preset table from core/config-schema.js. The local
+  // copy that used to live here disagreed with it on canvasNoiseStrength,
+  // webglJitter and audioNoiseStrength, so the profile dropdown and these
+  // preset buttons wrote different values for the same profile name.
+  const presets = (globalThis.ssConfigSchema && globalThis.ssConfigSchema.presets) || {};
   const presetLabels = { light: 'Light', balanced: 'Balanced', maximum: 'Maximum' };
   const presetBtns = document.querySelectorAll('.preset');
   for (let i = 0; i < presetBtns.length; i++) {
     presetBtns[i].addEventListener('click', function () {
       const name = presetBtns[i].dataset.preset;
-      const patch = presets[name];
+      // BUG-3: one preset table, in core/config-schema.js. 'balanced' is empty
+      // there because it *is* the defaults, so this button restores the schema
+      // defaults for every key the other presets touch.
+      let patch = presets[name];
+      if (name === 'balanced') {
+        patch = {};
+        Object.keys(presets).forEach(function (profile) {
+          Object.keys(presets[profile] || {}).forEach(function (key) {
+            if (patch[key] !== undefined) return;
+            patch[key] = key === 'webrtcMode' ? DEFAULTS.mode : DEFAULTS[key];
+          });
+        });
+      }
       if (!patch) return;
       Object.keys(patch).forEach(function (key) {
         const el = document.querySelector('[data-key="' + key + '"]');

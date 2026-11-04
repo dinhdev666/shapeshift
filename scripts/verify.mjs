@@ -588,6 +588,201 @@ ringLeaks.length === 0
   ? ok('no raw 251.3 literal in popup/options JS')
   : fail('no raw 251.3 literal in popup/options JS', ringLeaks.join(', '));
 
+section('preset single source');
+// BUG-3: the Options page used to keep its own preset table beside the schema's
+// and the two disagreed on canvasNoiseStrength, webglJitter and
+// audioNoiseStrength, so the profile dropdown and the preset buttons wrote
+// different values for one profile name. Pin that options.js reads the schema
+// table and declares no second copy.
+const optionsPresetSrc = text(join(ROOT, 'options', 'options.js'));
+const presetChecks = [
+  ['options.js reads the schema preset table', optionsPresetSrc.includes('ssConfigSchema.presets')],
+  ['options.js declares no second preset table', !/const\s+presets\s*=\s*\{/.test(optionsPresetSrc)]
+];
+const presetFailures = presetChecks.filter(([, pass]) => !pass).map(([label]) => label);
+presetFailures.length === 0
+  ? ok('the preset table has exactly one definition')
+  : fail('the preset table has exactly one definition', presetFailures.join(', '));
+
+section('config coverage');
+// IMP-1: saltGuardIntervalMinutes and rotationReloadScope were read by the
+// service worker but rendered by no control, so they could only be changed by
+// hand-editing storage. A new schema key must not repeat that: every default
+// has to be rendered by a GROUPS entry or listed in ADVANCED_ONLY with a
+// reason.
+const optionsSrcForCoverage = text(join(ROOT, 'options', 'options.js'));
+const groupsAt = optionsSrcForCoverage.indexOf('const GROUPS = {');
+const groupsEnd = groupsAt === -1 ? -1 : optionsSrcForCoverage.indexOf('\n};', groupsAt);
+const groupsBlock = groupsAt !== -1 && groupsEnd !== -1
+  ? optionsSrcForCoverage.slice(groupsAt, groupsEnd)
+  : '';
+const renderedKeys = new Set((groupsBlock.match(/key:\s*'([A-Za-z0-9_]+)'/g) || [])
+  .map((m) => m.replace(/^key:\s*'/, '').replace(/'$/, '')));
+// Deliberately not a UI control:
+//   mode           - schema's flat alias for webrtc.mode; the UI renders webrtcMode
+//   blockIPLeak    - legacy WebRTC boolean, superseded by the webrtcMode tri-state
+//   forceRelay     - legacy WebRTC boolean, superseded by the webrtcMode tri-state
+//   noiseOverrides - per-origin container edited in the Sites/overrides panes
+const ADVANCED_ONLY = new Set(['mode', 'blockIPLeak', 'forceRelay', 'noiseOverrides']);
+const schemaSandbox = {};
+try {
+  new Function('globalThis', text(join(ROOT, 'core', 'config-schema.js')))(schemaSandbox);
+} catch (err) {
+  fail('config-schema.js loads for the coverage check', err.message);
+}
+const schemaFlatKeys = Object.keys(schemaSandbox.ssFlatDefaults || {});
+const unrenderedKeys = schemaFlatKeys.filter((k) => !renderedKeys.has(k) && !ADVANCED_ONLY.has(k));
+schemaFlatKeys.length >= 30
+  ? ok('config coverage reads every schema default')
+  : fail('config coverage reads every schema default', String(schemaFlatKeys.length));
+// A positive control: an empty GROUPS scan would make the next check vacuous.
+renderedKeys.size >= 25
+  ? ok('the rendered-key scan found the GROUPS table')
+  : fail('the rendered-key scan found the GROUPS table', String(renderedKeys.size));
+unrenderedKeys.length === 0
+  ? ok('every schema setting is rendered in Options or explicitly excluded')
+  : fail('every schema setting is rendered in Options or explicitly excluded', unrenderedKeys.join(', '));
+
+section('statistics contract');
+// IMP-4: the ordered counter list lives in core/config-schema.js so the popup,
+// the Options page and these gates share one definition. It has to agree with
+// the labels stats_tracker.js increments and with the aggregates the service
+// worker writes, or a surface silently stops being counted.
+const ssStatCats = schemaSandbox.ssStatCategories || [];
+const ssStatIds = ssStatCats.map((entry) => entry && entry.id);
+const trackerLocalBlock = (trackerSrc.match(/const localStats = \{([\s\S]*?)\};/) || [])[1] || '';
+// Parse the block line by line: the last entry in localStats (`touchReads: 0`)
+// has no trailing comma, so a `: 0,` pattern counted only 12 of the 13
+// counters and reported a mismatch that did not exist.
+const trackerLocalIds = trackerLocalBlock
+  .split(String.fromCharCode(10))
+  .map((line) => (line.match(/^\s*([a-zA-Z]+):\s*0\b/) || [])[1])
+  .filter(Boolean);
+const serviceWorkerSrc = text(join(ROOT, 'background', 'service-worker.js'));
+const statContractChecks = [
+  ['the shared counter list is exported', ssStatCats.length >= 10],
+  ['every category has a service-worker aggregate',
+    ssStatCats.every((entry) => entry && typeof entry.field === 'string' && serviceWorkerSrc.indexOf(entry.field + ':') !== -1)],
+  ['the shared list matches the tracker labels',
+    ssStatIds.length === trackerLocalIds.length && ssStatIds.every((id, i) => id === trackerLocalIds[i])],
+  ['the summing helper is exported', typeof schemaSandbox.ssSumStats === 'function'],
+  ['the popup sums through the shared helper', text(join(ROOT, 'popup', 'popup.js')).includes('ssSumStats(stats)')],
+  ['the options page sums through the shared helper', text(join(ROOT, 'options', 'options.js')).includes('ssSumStats(stats)')],
+  ['neither UI hand-sums the totals',
+    !/totalCanvasReads \|\| 0\) \+/.test(text(join(ROOT, 'popup', 'popup.js'))) &&
+    !/totalCanvasReads \|\| 0\) \+/.test(text(join(ROOT, 'options', 'options.js')))]
+];
+const statContractFailures = statContractChecks.filter(([, pass]) => !pass).map(([label]) => label);
+statContractFailures.length === 0
+  ? ok('the statistics list has one definition across UI, tracker and worker')
+  : fail('the statistics list has one definition across UI, tracker and worker', statContractFailures.join(', '));
+
+section('diagnostics export');
+// FEAT-3: a diagnostics export used to ship hook health only, so a reported
+// bug could not be reproduced against the settings that produced it. The
+// export now carries the normalized+validated config. The salt is the one
+// thing that must never travel: it is the root of every derived identity, so
+// a file containing it would clone the exporter fingerprints onto any browser
+// it was imported into. Scope the salt assertion to this one function - other
+// code in the file legitimately mentions storage keys.
+const diagnosticsExportSrc = text(join(ROOT, 'options', 'options.js'));
+const diagStart = diagnosticsExportSrc.indexOf('async function exportDiagnosticsToFile');
+const diagEnd = diagnosticsExportSrc.indexOf('async function renderSites');
+const diagBody = diagStart === -1 ? '' : diagnosticsExportSrc.slice(diagStart, diagEnd === -1 ? undefined : diagEnd);
+const diagnosticsExportChecks = [
+  ['the diagnostics export function is present', diagBody.length > 0],
+  ['the diagnostics export carries the effective config', diagBody.indexOf('config: validated.valid') !== -1],
+  ['the exported config is normalized and validated first',
+    diagBody.indexOf('ssNormalizeConfig') !== -1 && diagBody.indexOf('ssValidateConfig') !== -1],
+  // Scan executable code only: the function explains in prose that the salt
+  // is never included, and a raw substring scan flagged that very comment.
+  ['the diagnostics export never reads the salt',
+    stripLineComments(diagBody).indexOf('ss_salt') === -1]
+];
+const diagnosticsExportFailures = diagnosticsExportChecks.filter(([, pass]) => !pass).map(([label]) => label);
+diagnosticsExportFailures.length === 0
+  ? ok('the diagnostics export carries the config but never the salt')
+  : fail('the diagnostics export carries the config but never the salt', diagnosticsExportFailures.join(', '));
+
+section('timed pause');
+// FEAT-1: a pause that expires on its own. Enforcement must live in the content
+// script (a timer cannot be relied on), cleanup in the worker, and the control
+// in Options - so all three halves are pinned together. An unparseable value
+// must stay indefinite, otherwise a hand-edited entry disables protection.
+const pauseBootSrc = text(join(ROOT, 'content', 'bootstrap.js'));
+const pauseOptionsSrc = text(join(ROOT, 'options', 'options.js'));
+const timedPauseChecks = [
+  ['bootstrap parses pausedUntil', pauseBootSrc.includes('Date.parse(siteSetting.pausedUntil)')],
+  ['a lapsed pause resumes protection', pauseBootSrc.includes('pauseUntilMs > Date.now()')],
+  ['an unparseable pause stays indefinite', pauseBootSrc.includes('pauseActive = true;')],
+  ['the worker sweeps lapsed pauses', serviceWorkerSrc.includes('sweepExpiredPauses')],
+  ['the sweep runs on the salt-guard alarm', /SALT_GUARD_ALARM[\s\S]{0,200}sweepExpiredPauses\(\)/.test(serviceWorkerSrc)],
+  ['options offers a timed pause', pauseOptionsSrc.includes("'Pause 1h'")],
+  ['the status label shows the expiry', pauseOptionsSrc.includes('Protection paused until')],
+  ['the import sanitizer normalizes pausedUntil', pauseOptionsSrc.includes('cleaned.pausedUntil = new Date(pausedUntilMs).toISOString()')],
+  ['resuming clears the expiry', pauseOptionsSrc.includes('delete current[origin].pausedUntil')]
+];
+const timedPauseFailures = timedPauseChecks.filter(([, pass]) => !pass).map(([label]) => label);
+timedPauseFailures.length === 0
+  ? ok('a timed pause is enforced, swept and reversible')
+  : fail('a timed pause is enforced, swept and reversible', timedPauseFailures.join(', '));
+
+section('rotation history');
+// FEAT-2: the worker records a bounded log and the Identity pane renders it. A
+// log nobody renders is dead weight; a pane reading a key nobody writes is
+// permanently empty. Pin both ends, the cap, and that both rotation paths
+// (global and per-origin) record.
+const historyChecks = [
+  ['the worker declares the history key', serviceWorkerSrc.includes("ROTATION_HISTORY_KEY = 'ss_rotation_history'")],
+  ['history is capped at 10', /ROTATION_HISTORY_LIMIT = 10/.test(serviceWorkerSrc)],
+  ['the cap is applied on write', serviceWorkerSrc.includes('.slice(-ROTATION_HISTORY_LIMIT)')],
+  ['both rotation paths record', (serviceWorkerSrc.match(/recordRotationHistory\(/g) || []).length >= 3],
+  ['the options page reads the history', pauseOptionsSrc.includes('ss_rotation_history')],
+  ['the history card is rendered', pauseOptionsSrc.includes('rotationHistoryBody')],
+  ['history entries are built with textContent', pauseOptionsSrc.includes("body.textContent = ''")]
+];
+const historyFailures = historyChecks.filter(([, pass]) => !pass).map(([label]) => label);
+historyFailures.length === 0
+  ? ok('rotation history is recorded, capped and rendered')
+  : fail('rotation history is recorded, capped and rendered', historyFailures.join(', '));
+
+section('settings filter');
+// FEAT-4: one filter box across every pane. It must stay a pure DOM filter: the
+// typed value is compared against textContent, never written to storage and
+// never injected as markup.
+const filterChecks = [
+  ['the filter input exists', pauseOptionsSrc.includes("input.id = 'settingsFilter'")],
+  ['the filter is labelled for assistive tech', pauseOptionsSrc.includes("setAttribute('aria-label', 'Filter settings')")],
+  ['the filter hides non-matching rows', pauseOptionsSrc.includes('row.hidden =')],
+  ['the filter matches on textContent', pauseOptionsSrc.includes('row.textContent.toLowerCase()')],
+  ['the filter writes nothing to storage', !/settingsFilter[\s\S]{0,400}chrome\.storage/.test(pauseOptionsSrc)]
+];
+const filterFailures = filterChecks.filter(([, pass]) => !pass).map(([label]) => label);
+filterFailures.length === 0
+  ? ok('the settings filter is a pure, labelled DOM filter')
+  : fail('the settings filter is a pure, labelled DOM filter', filterFailures.join(', '));
+
+section('settings sync');
+// IMP-5: chrome.storage.sync is a write-only mirror unless the user can pull it
+// back, and a mirror whose semantics are undocumented is a trap - a second
+// machine silently keeps its own settings forever. Pin the validated pull path
+// and the documented local-wins rule together.
+const syncOptionsSrc = text(join(ROOT, 'options', 'options.js'));
+const syncChecks = [
+  ['options can pull the synced config', syncOptionsSrc.includes('pullConfigFromSync')],
+  ['the pull normalizes then validates',
+    /pullConfigFromSync[\s\S]{0,900}ssNormalizeConfig[\s\S]{0,500}ssValidateConfig/.test(syncOptionsSrc)],
+  ['the pull writes only ssConfig', syncOptionsSrc.includes('set({ ssConfig: cleaned })')],
+  ['the pull control exists and is labelled',
+    syncOptionsSrc.includes("'pullSyncBtn'") && syncOptionsSrc.includes('Pull settings from sync')],
+  ['the pull never reads the salt',
+    !/pullConfigFromSync[\s\S]{0,900}ss_salt/.test(syncOptionsSrc)]
+];
+const syncFailures = syncChecks.filter(([, pass]) => !pass).map(([label]) => label);
+syncFailures.length === 0
+  ? ok('the synced config can be pulled back through the validated path')
+  : fail('the synced config can be pulled back through the validated path', syncFailures.join(', '));
+
 section('UI safety');
 const innerHtmlHits = jsFiles.filter((f) => (f.indexOf('popup') !== -1 || f.indexOf('options') !== -1) && text(f).indexOf('innerHTML') !== -1);
 innerHtmlHits.length === 0 ? ok('no innerHTML in popup/options controllers') : fail('no innerHTML in popup/options', innerHtmlHits.join(', '));
@@ -625,7 +820,7 @@ section('storage contract');
 // 'ss_salt:<origin>', so the prefix itself is a legal key token.
 // 'ss_salt_generation' and 'ss_tab_gen_' are internal bfcache-guard keys
 // (background/service-worker.js Feature 5.4) used as variables, not literals.
-const ALLOWED_KEYS = new Set(['ssConfig', 'ss_salt', 'ss_salt:', 'ss_stats', 'ss_site_settings', 'ss_rotation_info', 'ss_diagnostics', 'ss_salt_generation']);
+const ALLOWED_KEYS = new Set(['ssConfig', 'ss_salt', 'ss_salt:', 'ss_stats', 'ss_site_settings', 'ss_rotation_info', 'ss_rotation_history', 'ss_diagnostics', 'ss_salt_generation']);
 // Keys constructed by appending a variable suffix (e.g. ss_tab_gen_<tabId>).
 const ALLOWED_PREFIXES = ['ss_tab_gen_'];
 function isAllowedKey (key) {
@@ -675,7 +870,27 @@ function strayKeysIn (src) {
     // examined the literal at all. Join a short forward window from each
     // chrome.storage.* reference before scanning it, so the key is seen even
     // when it does not share a line with the area token.
-    const window = lines.slice(li, li + 4).join(String.fromCharCode(10));
+    // Clip the window to the storage call own arguments. A fixed 4-line
+    // forward window also swallowed unrelated string literals on the lines
+    // after a storage call, so a reason label such as origin-rotation was
+    // reported as a stray storage key. Balance parentheses from the
+    // chrome.storage token instead, and fall back to the fixed window when the
+    // call does not close within the cap.
+    let window = '';
+    let depth = 0;
+    let opened = false;
+    const areaAt = line.search(AREA_RE);
+    for (let j = li; j < Math.min(lines.length, li + 8); j++) {
+      const seg = j === li ? line.slice(areaAt) : lines[j];
+      window += (j === li ? seg : String.fromCharCode(10) + seg);
+      for (let ci = 0; ci < seg.length; ci++) {
+        const ch = seg[ci];
+        if (ch === '(') { depth++; opened = true; }
+        else if (ch === ')') depth--;
+      }
+      if (opened && depth <= 0) break;
+    }
+    if (!opened || depth > 0) window = lines.slice(li, li + 4).join(String.fromCharCode(10));
     let m;
     KEY_TOKEN_RE.lastIndex = 0;
     while ((m = KEY_TOKEN_RE.exec(window)) !== null) {

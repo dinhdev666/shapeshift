@@ -78,6 +78,23 @@
     const out = {};
     for (const k in stored) out[k] = stored[k];
     globalThis.ssMigrateConfig(out);
+
+    // FEAT-2: apply profile preset overrides BEFORE the flat-key fold. A preset
+    // key can itself be a legacy flat name (`webrtcMode`), and applying it after
+    // the fold left it as an unknown top-level key that ssValidateConfig()
+    // dropped on the next save. The fold below writes the user's stored flat
+    // value over the preset, so an explicit choice still wins.
+    const PROFILE_PRESETS = schema.presets || {};
+    const profileName = out.profile;
+    if (profileName && PROFILE_PRESETS[profileName] && profileName !== 'balanced') {
+      const preset = PROFILE_PRESETS[profileName];
+      for (const pk in preset) {
+        if (!Object.prototype.hasOwnProperty.call(out, pk)) {
+          out[pk] = preset[pk];
+        }
+      }
+    }
+
     for (const flatKey in LEGACY_FLAT_TO_NESTED) {
       if (!Object.prototype.hasOwnProperty.call(stored, flatKey)) continue;
       const pair = LEGACY_FLAT_TO_NESTED[flatKey];
@@ -91,24 +108,6 @@
       // so ssValidateConfig() never sees the flat name as an unknown top-level
       // key and wrongly drops it (and toasts "Dropped invalid keys" on save).
       delete out[flatKey];
-    }
-
-    // FEAT-2: apply profile preset overrides. Each non-balanced profile
-    // defines a sparse override map (only the keys that actually change).
-    // We apply it BEFORE the legacy-flag mapping so that a legacy flag the
-    // user explicitly set (e.g. enableCanvasNoise: false) still wins over
-    // the preset's default for that surface. The check is against `out`, not
-    // `stored`, because `out` has already absorbed migration + flat-to-nested
-    // folds.
-    const PROFILE_PRESETS = schema.presets || {};
-    const profileName = out.profile;
-    if (profileName && PROFILE_PRESETS[profileName] && profileName !== 'balanced') {
-      const preset = PROFILE_PRESETS[profileName];
-      for (const pk in preset) {
-        if (!Object.prototype.hasOwnProperty.call(out, pk)) {
-          out[pk] = preset[pk];
-        }
-      }
     }
 
     // FEAT-1: backward-compat mapping from legacy surface flags to the
@@ -149,19 +148,14 @@
     timingJitter: [0, 20],
     saltGuardIntervalMinutes: [1, 1440],
   };
-  const CONFIG_BOOLEAN_KEYS = [
-    'debug', 'enableCanvasNoise', 'enableWebGLMasking', 'maskWebGLVendorStrings',
-    'shuffleWebGLExtensions', 'enableAudioNoise', 'enableNavigatorFuzz',
-    'perOriginFingerprint', 'enableWebRTCProtection', 'enableMediaDeviceProtection',
-    'enableScreenProtection', 'enableFontProtection', 'enableTimezoneProtection',
-    'enableSensorProtection', 'enableTouchProtection', 'enableUserAgentProtection',
-    'enableMediaProtection', 'enableGeolocationProtection', 'enableDetectionResistance',
-    'enableWebGPUProtection', 'enableKeyboardProtection',
-    'enableCanvasProtection', 'enableWebGlProtection', 'enableAudioProtection',
-    'useStrongKDF', 'useGaussianNoise', 'autoRotateFingerprint', 'rotateOnStartup',
-    'enableVisualViewportProtection',
-  ];
-  const CONFIG_GROUP_KEYS = ['navigator', 'webrtc', 'screen', 'mediaDevices', 'sensors', 'geolocation'];
+  // Derived from the schema, not hand-copied. The literal lists this replaces
+  // had already drifted: notifyOnRotation, reloadTabsOnRotation and
+  // clearSiteDataOnRotation were missing from the boolean list, so
+  // content/bootstrap.js silently dropped them from a per-origin override and
+  // no gate noticed. Deriving keeps every future schema key in the whitelist.
+  const isGroup = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+  const CONFIG_BOOLEAN_KEYS = Object.keys(defaults).filter((k) => typeof defaults[k] === 'boolean');
+  const CONFIG_GROUP_KEYS = Object.keys(defaults).filter((k) => isGroup(defaults[k]));
   const CONFIG_STRING_ENUM_KEYS = { persona: ['auto', 'windows', 'mac', 'linux'] };
 
   /**
@@ -298,9 +292,6 @@
       });
       const stored = globalThis.ssNormalizeConfig(result.ssConfig || {});
       const validated = globalThis.ssValidateConfig(stored);
-      if (validated.dropped.length > 0 && (merged.debug || config.debug)) {
-        console.log('[shapeshift][config] Dropped invalid keys:', validated.dropped);
-      }
       const merged = {};
       for (const k in defaultConfig) merged[k] = defaultConfig[k];
       for (const key in validated.valid) {
@@ -316,6 +307,12 @@
         }
       }
       globalThis.ssConfig = merged;
+      // Report dropped keys AFTER `merged` exists: reading it here used to hit
+      // the temporal dead zone, throw, and hand back bare defaults - so one
+      // unknown key reset every stored setting on every page load.
+      if (validated.dropped.length > 0 && merged.debug) {
+        console.log('[shapeshift][config] Dropped invalid keys:', validated.dropped);
+      }
       if (merged.debug) console.log('[shapeshift][config] Loaded config:', merged);
       return merged;
     } catch (e) {
